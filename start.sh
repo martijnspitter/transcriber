@@ -1,0 +1,87 @@
+#!/bin/bash
+
+# Colors for output
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+# Print banner
+echo -e "${GREEN}"
+echo "╔════════════════════════════════════════════════════╗"
+echo "║        Meeting Transcriber - Development           ║"
+echo "╚════════════════════════════════════════════════════╝"
+echo -e "${NC}"
+
+# Ensure we're in the project root directory
+cd "$(dirname "$0")"
+
+# Check if Python virtual environment exists
+if [ ! -d "venv" ]; then
+    echo -e "${YELLOW}Python virtual environment not found. Creating one...${NC}"
+    python3 -m venv venv
+    source venv/bin/activate
+    echo -e "${GREEN}Installing Python dependencies...${NC}"
+    pip install -r backend/requirements.txt
+else
+    source venv/bin/activate
+fi
+
+# Check if Node modules are installed
+if [ ! -d "frontend/node_modules" ]; then
+    echo -e "${YELLOW}Node modules not found. Installing...${NC}"
+    cd frontend
+    npm install
+    cd ..
+fi
+
+# Function to handle script exit
+function cleanup {
+    echo -e "\n${YELLOW}Shutting down servers...${NC}"
+    kill $FRONTEND_PID $BACKEND_PID 2>/dev/null
+    exit 0
+}
+
+# Check if backend is running by testing the API endpoint
+function check_backend_ready {
+    for i in {1..30}; do
+        if curl -s http://localhost:8000/api/meetings/ >/dev/null 2>&1; then
+            echo -e "${GREEN}Backend API is ready!${NC}"
+            return 0
+        fi
+        echo -e "${YELLOW}Waiting for backend to start (attempt $i/30)...${NC}"
+        sleep 1
+    done
+    echo -e "${RED}Backend failed to start or is not responding.${NC}"
+    return 1
+}
+
+# Set up trap for clean exit
+trap cleanup SIGINT
+
+# Start the backend server
+echo -e "${GREEN}Starting backend server...${NC}"
+cd backend
+python run.py &
+BACKEND_PID=$!
+cd ..
+
+# Wait for backend to initialize and be ready
+echo -e "${YELLOW}Waiting for backend API to be available...${NC}"
+check_backend_ready
+
+# Start the frontend development server
+echo -e "${GREEN}Starting frontend development server...${NC}"
+cd frontend
+pnpm run dev --open &
+FRONTEND_PID=$!
+cd ..
+
+echo -e "${GREEN}Both servers are running:${NC}"
+echo -e "- ${YELLOW}Frontend:${NC} http://localhost:5173"
+echo -e "- ${YELLOW}Backend API:${NC} http://localhost:8000"
+echo -e "- ${YELLOW}API Docs:${NC} http://localhost:8000/docs"
+echo -e "${YELLOW}Press Ctrl+C to stop both servers${NC}"
+
+# Keep the script running
+wait $BACKEND_PID $FRONTEND_PID
