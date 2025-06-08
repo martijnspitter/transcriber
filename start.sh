@@ -38,7 +38,50 @@ fi
 # Function to handle script exit
 function cleanup {
     echo -e "\n${YELLOW}Shutting down servers...${NC}"
-    kill $FRONTEND_PID $BACKEND_PID 2>/dev/null
+    
+    # Send SIGTERM to all child processes in the backend process group
+    if [ -n "$BACKEND_PID" ]; then
+        echo -e "${YELLOW}Stopping backend processes...${NC}"
+        # Give Python a chance to clean up gracefully
+        kill -TERM $BACKEND_PID 2>/dev/null
+        
+        # Wait for up to 3 seconds for backend to exit gracefully
+        for i in {1..6}; do
+            if ! ps -p $BACKEND_PID > /dev/null 2>&1; then
+                echo -e "${GREEN}Backend server stopped gracefully.${NC}"
+                break
+            fi
+            sleep 0.5
+        done
+        
+        # Kill any remaining child processes
+        pkill -P $BACKEND_PID 2>/dev/null
+        
+        # Force kill if still running
+        if ps -p $BACKEND_PID > /dev/null 2>&1; then
+            echo -e "${RED}Force stopping backend processes...${NC}"
+            kill -9 $BACKEND_PID 2>/dev/null
+        fi
+    fi
+    
+    # Kill frontend process
+    if [ -n "$FRONTEND_PID" ]; then
+        echo -e "${YELLOW}Stopping frontend server...${NC}"
+        kill $FRONTEND_PID 2>/dev/null
+        sleep 0.5
+        # Force kill if still running
+        if ps -p $FRONTEND_PID > /dev/null 2>&1; then
+            echo -e "${YELLOW}Force stopping frontend server...${NC}"
+            kill -9 $FRONTEND_PID 2>/dev/null
+        fi
+    fi
+    
+    echo -e "${GREEN}All processes terminated${NC}"
+    # Make sure there are no orphaned Python processes
+    if pgrep -f "python.*app.main:app" > /dev/null; then
+        echo -e "${YELLOW}Cleaning up orphaned Python processes...${NC}"
+        pkill -f "python.*app.main:app"
+    fi
     exit 0
 }
 

@@ -1,9 +1,11 @@
-<script lang="ts">import {
+<script lang="ts">
+import {
   startMeeting,
   stopMeeting,
   pollMeetingUntilComplete,
   type Meeting
 } from "../services/api";
+import LiveTranscription from '../components/LiveTranscription.svelte';
 
 let isRecording = false;
 let meetingTitle = "New Meeting";
@@ -176,7 +178,15 @@ function formatTime(totalSeconds: number): string {
         </div>
       {/if}
 
-      {#if isProcessing}
+      {#if isRecording && currentMeetingId}
+        <!-- Live transcription during recording -->
+        <div class="h-64 mb-4 border rounded-lg overflow-hidden">
+          <LiveTranscription 
+            meetingId={currentMeetingId} 
+            initialTranscript=""
+          />
+        </div>
+      {:else if isProcessing}
         <div class="bg-gray-50 p-4 rounded border text-center">
           <div class="flex justify-center items-center mb-2">
             <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-500"></div>
@@ -190,6 +200,7 @@ function formatTime(totalSeconds: number): string {
       {:else}
         <div class="bg-gray-50 p-4 rounded border text-center text-gray-500">
           <p>Start recording a meeting to see the transcription here</p>
+          <p class="text-xs mt-2">Real-time transcription will appear as you speak</p>
         </div>
       {/if}
 

@@ -9,6 +9,7 @@ import sounddevice as sd
 from scipy.io import wavfile
 from faster_whisper import WhisperModel
 import ollama
+import asyncio
 
 # Configure logging
 logging.basicConfig(level=logging.INFO,
@@ -26,6 +27,17 @@ class TranscriberService:
         # Initialize whisper model
         self.whisper_model = None
         self.sample_rate = 16000
+
+        # Real-time transcription
+        self.live_transcription_callbacks = {}  # meeting_id -> list of callback functions
+        self.real_time_interval = 5  # Process real-time transcription every 5 seconds
+        
+        # Store the main event loop for use across threads
+        try:
+            self.main_loop = asyncio.get_event_loop()
+        except RuntimeError:
+            self.main_loop = None
+            logger.warning("Could not get event loop at initialization. Will try again when needed.")
 
     def _load_whisper_model(self):
         """Load the whisper model if not already loaded"""
@@ -56,10 +68,15 @@ class TranscriberService:
             "participants": participants,
             "audio_data": [],
             "thread": None,
+            "real_time_thread": None,
             "stop_flag": threading.Event(),
+            "real_time_stop_flag": threading.Event(),
             "audio_file": None,
             "transcript_path": None,
-            "summary_path": None
+            "summary_path": None,
+            "current_transcript": "",
+            "last_processed_chunk": 0,
+            "transcript_segments": []
         }
 
         try:
@@ -70,6 +87,14 @@ class TranscriberService:
             )
             meeting_data["thread"].daemon = True
             meeting_data["thread"].start()
+
+            # Start real-time transcription thread
+            meeting_data["real_time_thread"] = threading.Thread(
+                target=self._real_time_transcription_worker,
+                args=(meeting_id, meeting_data["real_time_stop_flag"])
+            )
+            meeting_data["real_time_thread"].daemon = True
+            meeting_data["real_time_thread"].start()
 
             self.active_meetings[meeting_id] = meeting_data
             logger.info(f"Started meeting: {meeting_id}")
@@ -131,10 +156,13 @@ class TranscriberService:
             return False, f"Meeting is not recording, current status: {meeting['status']}"
 
         try:
-            # Set stop flag and wait for recording thread to finish
+            # Set stop flags and wait for threads to finish
             meeting["stop_flag"].set()
+            meeting["real_time_stop_flag"].set()
             if meeting["thread"].is_alive():
                 meeting["thread"].join(timeout=5.0)
+            if meeting["real_time_thread"].is_alive():
+                meeting["real_time_thread"].join(timeout=5.0)
 
             # Update meeting data
             meeting["end_time"] = datetime.datetime.now()
@@ -193,7 +221,8 @@ class TranscriberService:
 
                 # Transcribe audio
                 logger.info(f"Transcribing meeting {meeting_id}")
-                transcript = self._transcribe_audio(audio_file)
+                transcript, segments = self._transcribe_audio(audio_file)
+                meeting["transcript_segments"] = segments
 
                 # Summarize transcript
                 logger.info(f"Summarizing meeting {meeting_id}")
@@ -238,15 +267,21 @@ class TranscriberService:
                 # Use faster-whisper
                 segments, info = self.whisper_model.transcribe(audio_file, beam_size=5)
                 transcript = ""
+                segment_list = []
                 for segment in segments:
                     transcript += segment.text + " "
-                return transcript
+                    segment_list.append({
+                        "text": segment.text,
+                        "start": segment.start,
+                        "end": segment.end
+                    })
+                return transcript, segment_list
             else:
-                return "Transcription not available - no transcription engine installed"
+                return "Transcription not available - no transcription engine installed", []
 
         except Exception as e:
             logger.error(f"Transcription error: {e}")
-            return f"Transcription failed: {str(e)}"
+            return f"Transcription failed: {str(e)}", []
 
     def _summarize_text(self, text):
         """Summarize transcript text using Ollama if available"""
@@ -283,9 +318,116 @@ class TranscriberService:
             "duration_seconds": meeting.get("duration_seconds"),
             "participants": meeting["participants"],
             "transcript_path": meeting.get("transcript_path"),
-            "summary_path": meeting.get("summary_path")
+            "summary_path": meeting.get("summary_path"),
+            "current_transcript": meeting.get("current_transcript", ""),
+            "transcript_segments": meeting.get("transcript_segments", [])
         }
 
     def get_all_meetings(self):
         """Get status for all meetings"""
         return [self.get_meeting_status(meeting_id) for meeting_id in self.active_meetings]
+
+    def _real_time_transcription_worker(self, meeting_id, stop_flag):
+        """Worker thread for real-time transcription"""
+        try:
+            # Ensure model is loaded
+            self._load_whisper_model()
+
+            logger.info(f"Starting real-time transcription for meeting {meeting_id}")
+
+            while not stop_flag.is_set():
+                if meeting_id not in self.active_meetings:
+                    logger.warning(f"Meeting {meeting_id} no longer exists, stopping real-time transcription")
+                    break
+
+                meeting = self.active_meetings[meeting_id]
+
+                # If we have enough new audio data
+                if len(meeting["audio_data"]) > meeting["last_processed_chunk"] + 10:  # Process after ~10 seconds of new audio
+                    # Get only the new audio data
+                    start_idx = meeting["last_processed_chunk"]
+                    audio_chunks = meeting["audio_data"][start_idx:]
+
+                    if audio_chunks:
+                        # Process the new audio data
+                        try:
+                            # Concatenate audio chunks
+                            audio_data = np.concatenate(audio_chunks)
+
+                            # Save temporary audio file
+                            temp_audio_file = os.path.join(self.output_dir, f"{meeting_id}_temp.wav")
+                            audio_data_int16 = np.int16(audio_data * 32767)
+                            wavfile.write(temp_audio_file, self.sample_rate, audio_data_int16)
+
+                            # Transcribe the audio
+                            partial_transcript, partial_segments = self._transcribe_audio(temp_audio_file)
+
+                            # Update the transcript for the meeting
+                            meeting["current_transcript"] += partial_transcript
+                            meeting["last_processed_chunk"] = len(meeting["audio_data"])
+
+                            # Notify all registered callbacks about the new transcript
+                            self._notify_transcript_update(meeting_id, meeting["current_transcript"], partial_transcript)
+
+                            # Clean up temporary file
+                            os.remove(temp_audio_file)
+
+                        except Exception as e:
+                            logger.error(f"Error in real-time transcription: {e}")
+
+                # Sleep to avoid high CPU usage
+                time.sleep(2)
+
+            logger.info(f"Real-time transcription stopped for meeting {meeting_id}")
+
+        except Exception as e:
+            logger.error(f"Error in real-time transcription worker: {e}")
+
+    def register_transcript_callback(self, meeting_id, callback):
+        """Register a callback function for transcript updates"""
+        if meeting_id not in self.live_transcription_callbacks:
+            self.live_transcription_callbacks[meeting_id] = []
+        
+        # Make sure we have a reference to the main event loop
+        if self.main_loop is None:
+            try:
+                self.main_loop = asyncio.get_event_loop()
+                logger.info("Stored main event loop during callback registration")
+            except RuntimeError:
+                logger.warning("No event loop available during callback registration")
+
+        self.live_transcription_callbacks[meeting_id].append(callback)
+        return True
+
+    def unregister_transcript_callback(self, meeting_id, callback):
+        """Unregister a callback function"""
+        if meeting_id in self.live_transcription_callbacks:
+            if callback in self.live_transcription_callbacks[meeting_id]:
+                self.live_transcription_callbacks[meeting_id].remove(callback)
+                return True
+        return False
+
+    def _notify_transcript_update(self, meeting_id, full_transcript, new_text):
+        """Notify all registered callbacks about a transcript update"""
+        if meeting_id in self.live_transcription_callbacks:
+            for callback in self.live_transcription_callbacks[meeting_id]:
+                try:
+                    if asyncio.iscoroutinefunction(callback):
+                        # If we don't have a main event loop reference, we can't run async callbacks
+                        if self.main_loop is None:
+                            logger.error("No event loop available for async callback - skipping")
+                            continue
+                            
+                        # Create a complete coroutine object
+                        coro = callback(meeting_id, full_transcript, new_text)
+                        
+                        # Schedule the coroutine to run in the main event loop
+                        try:
+                            asyncio.run_coroutine_threadsafe(coro, self.main_loop)
+                        except RuntimeError as e:
+                            logger.error(f"Failed to schedule async callback: {e}")
+                    else:
+                        # Call regular function
+                        callback(meeting_id, full_transcript, new_text)
+                except Exception as e:
+                    logger.error(f"Error in transcript callback: {e}")

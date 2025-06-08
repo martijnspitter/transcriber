@@ -59,7 +59,7 @@ The project currently includes:
   - Stopping meetings
   - Retrieving meeting status
   - Listing all meetings
-  
+
 - **Audio Processing**: Recording, saving, and processing meeting audio
 - **Transcription Engine**: Integration with Whisper for speech-to-text
 - **Summarization**: Text processing with Ollama/Mistral or fallback methods
@@ -91,7 +91,7 @@ The project currently includes:
    ```bash
    # On macOS with Homebrew
    brew install ollama
-   
+
    # Then pull the Mistral model
    ollama pull mistral
    ```
@@ -118,9 +118,9 @@ The project currently includes:
 - ✅ Backend API with FastAPI
 
 ### Phase 2: User Interface (In Progress)
-- 🔄 Svelte + Tailwind CSS frontend
-- 🔄 Start/stop meeting interface
-- 🔄 Real-time transcription display
+- ✅ Svelte + Tailwind CSS frontend
+- ✅ Start/stop meeting interface
+- ✅ Real-time transcription display
 - 🔄 Meeting management UI
 
 ### Phase 3: Speaker Recognition (Planned)

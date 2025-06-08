@@ -71,7 +71,3 @@ yarn-error.log
 # Svelte build directory
 frontend/public/build/
 frontend/.svelte-kit/
-
-# PoC
-main.py
-meeting_transcriber.py
