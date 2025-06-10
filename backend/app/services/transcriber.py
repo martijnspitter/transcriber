@@ -31,7 +31,7 @@ class TranscriberService:
         # Real-time transcription
         self.live_transcription_callbacks = {}  # meeting_id -> list of callback functions
         self.real_time_interval = 5  # Process real-time transcription every 5 seconds
-        
+
         # Store the main event loop for use across threads
         try:
             self.main_loop = asyncio.get_event_loop()
@@ -232,6 +232,10 @@ class TranscriberService:
                     summary = "Summary generation failed. Please review the transcript."
                     logger.warning(f"Summary generation failed for meeting {meeting_id}")
 
+                # Store the summary content in memory for UI display before writing to file
+                meeting["summary_content"] = summary
+                logger.info(f"Summary for meeting {meeting_id}: {summary}")
+
                 # Save transcript and summary as markdown files
                 transcript_file = os.path.join(self.output_dir, f"{base_filename}_transcript.md")
                 summary_file = os.path.join(self.output_dir, f"{base_filename}_summary.md")
@@ -250,7 +254,7 @@ class TranscriberService:
                     f.write(f"Participants: {', '.join(meeting['participants'])}\n\n")
                     f.write(summary)
 
-                # Update meeting data with paths
+                # Update meeting data with paths (summary content already stored)
                 meeting["transcript_path"] = transcript_file
                 meeting["summary_path"] = summary_file
                 meeting["status"] = "completed"
@@ -319,6 +323,7 @@ class TranscriberService:
             "participants": meeting["participants"],
             "transcript_path": meeting.get("transcript_path"),
             "summary_path": meeting.get("summary_path"),
+            "summary_content": meeting.get("summary_content"),
             "current_transcript": meeting.get("current_transcript", ""),
             "transcript_segments": meeting.get("transcript_segments", [])
         }
@@ -387,7 +392,7 @@ class TranscriberService:
         """Register a callback function for transcript updates"""
         if meeting_id not in self.live_transcription_callbacks:
             self.live_transcription_callbacks[meeting_id] = []
-        
+
         # Make sure we have a reference to the main event loop
         if self.main_loop is None:
             try:
@@ -417,10 +422,10 @@ class TranscriberService:
                         if self.main_loop is None:
                             logger.error("No event loop available for async callback - skipping")
                             continue
-                            
+
                         # Create a complete coroutine object
                         coro = callback(meeting_id, full_transcript, new_text)
-                        
+
                         # Schedule the coroutine to run in the main event loop
                         try:
                             asyncio.run_coroutine_threadsafe(coro, self.main_loop)

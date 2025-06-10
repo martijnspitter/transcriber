@@ -6,6 +6,8 @@ import {
   type Meeting
 } from "../services/api";
 import LiveTranscription from '../components/LiveTranscription.svelte';
+import {  onDestroy } from 'svelte';
+import { transcriptWebSocket } from '../services/websocket';
 
 let isRecording = false;
 let meetingTitle = "New Meeting";
@@ -63,15 +65,29 @@ async function stopRecording() {
       timer = null;
     }
 
+    // Ensure WebSocket connections are properly closed
+    try {
+      transcriptWebSocket.disconnect(true);
+    } catch (e) {
+      console.warn("Error disconnecting WebSocket:", e);
+    }
+
     // Call the backend API to stop meeting
     await stopMeeting(currentMeetingId);
     transcriptText = "Processing your meeting recording...";
+
+    // Ensure WebSocket connections are properly closed when recording stops
+    transcriptWebSocket.disconnect(true);
 
     // Poll for meeting status until complete
     try {
       meeting = await pollMeetingUntilComplete(currentMeetingId);
       if (meeting.status === 'completed') {
-        transcriptText = `Transcription complete! Files saved at:\n\nTranscript: ${meeting.transcript_path}\nSummary: ${meeting.summary_path}`;
+        if (meeting.summary_content) {
+          transcriptText = "Transcription and summarization complete!";
+        } else {
+          transcriptText = "Transcription complete! Files saved to your Documents folder.";
+        }
       } else {
         transcriptText = "There was an error processing your meeting.";
       }
@@ -105,7 +121,26 @@ function formatTime(totalSeconds: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-}</script>
+}
+
+// Clean up resources when component is destroyed
+onDestroy(() => {
+  if (timer !== null) {
+    clearInterval(timer);
+    timer = null;
+  }
+
+  // Ensure all WebSocket connections are properly closed
+  transcriptWebSocket.disconnect(true);
+
+  // If recording is active when component is destroyed, try to stop it
+  if (isRecording && currentMeetingId) {
+    console.log("Stopping recording on page unmount");
+    stopMeeting(currentMeetingId).catch(e =>
+      console.error("Failed to stop recording on unmount:", e)
+    );
+  }
+});</script>
 
 <main class="min-h-screen bg-gray-50">
   <div class="container mx-auto p-4">
@@ -181,9 +216,10 @@ function formatTime(totalSeconds: number): string {
       {#if isRecording && currentMeetingId}
         <!-- Live transcription during recording -->
         <div class="h-64 mb-4 border rounded-lg overflow-hidden">
-          <LiveTranscription 
-            meetingId={currentMeetingId} 
+          <LiveTranscription
+            meetingId={currentMeetingId}
             initialTranscript=""
+            isRecordingActive={isRecording}
           />
         </div>
       {:else if isProcessing}
@@ -192,6 +228,18 @@ function formatTime(totalSeconds: number): string {
             <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-500"></div>
           </div>
           <p>Processing your meeting recording...</p>
+        </div>
+      {:else if meeting && meeting.status === 'completed' && meeting.summary_content}
+        <!-- Display the summary -->
+        <div class="mb-6">
+          <h3 class="text-lg font-semibold text-gray-800 mb-2">Meeting Summary</h3>
+          <div class="bg-gray-50 p-4 rounded border prose prose-sm max-w-none">
+            <div class="whitespace-pre-line">{meeting.summary_content}</div>
+          </div>
+
+          <div class="text-sm text-gray-500 mt-2">
+            Meeting saved to your Documents folder
+          </div>
         </div>
       {:else if transcriptText}
         <div class="bg-gray-50 p-4 rounded border">
@@ -205,14 +253,11 @@ function formatTime(totalSeconds: number): string {
       {/if}
 
       {#if meeting && meeting.status === 'completed'}
-        <div class="mt-4 flex gap-2">
-          <a href={meeting.transcript_path} target="_blank" class="text-sm text-indigo-600 hover:text-indigo-800">
-            View Full Transcript
-          </a>
-          <span class="text-gray-500">•</span>
-          <a href={meeting.summary_path} target="_blank" class="text-sm text-indigo-600 hover:text-indigo-800">
-            View Summary
-          </a>
+        <div class="mt-4 flex items-center text-sm text-gray-500">
+          <svg class="w-4 h-4 mr-1 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+          </svg>
+          <span>Files saved at: ~/Documents/Meeting_Transcripts/</span>
         </div>
       {/if}
     </div>

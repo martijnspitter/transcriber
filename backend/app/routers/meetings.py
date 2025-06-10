@@ -83,6 +83,7 @@ async def create_meeting(meeting_data: MeetingCreate):
             participants=meeting_status["participants"],
             transcript_path=None,
             summary_path=None,
+            summary_content=None,
             current_transcript=""
         )
     except Exception as e:
@@ -160,6 +161,7 @@ async def get_meeting(meeting_id: str):
             participants=meeting_status["participants"],
             transcript_path=meeting_status.get("transcript_path"),
             summary_path=meeting_status.get("summary_path"),
+            summary_content=meeting_status.get("summary_content"),
             current_transcript=meeting_status.get("current_transcript", "")
         )
     except HTTPException:
@@ -190,7 +192,8 @@ async def get_all_meetings():
                     duration_seconds=m.get("duration_seconds"),
                     participants=m["participants"],
                     transcript_path=m.get("transcript_path"),
-                    summary_path=m.get("summary_path")
+                    summary_path=m.get("summary_path"),
+                    summary_content=m.get("summary_content")
                 ))
 
         return result

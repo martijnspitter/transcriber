@@ -4,6 +4,7 @@
 
   export let meetingId: string;
   export let initialTranscript: string = '';
+  export let isRecordingActive: boolean = true;
 
   let transcript = initialTranscript;
   let transcriptSegments: { text: string; timestamp?: string }[] = [];
@@ -43,7 +44,9 @@
   onDestroy(() => {
       disconnectWebSocket();
       clearReconnectTimeout();
-    });
+      // Reset state
+      reconnectAttempt = 0;
+  });
 
   // Connect to the WebSocket
   async function connectWebSocket() {
@@ -68,8 +71,14 @@
       // Set up close handler
       transcriptWebSocket.onClose(() => {
         isConnected = false;
-        connectionError = 'Connection closed. Attempting to reconnect...';
-        scheduleReconnect();
+    
+        // Only attempt to reconnect if recording is still active
+        if (isRecordingActive) {
+          connectionError = 'Connection closed. Attempting to reconnect...';
+          scheduleReconnect();
+        } else {
+          connectionError = 'Recording stopped';
+        }
       });
 
       // Start ping interval to keep connection alive
@@ -96,22 +105,34 @@
 
   // Schedule reconnection with backoff
   function scheduleReconnect() {
-    clearReconnectTimeout();
+    // Only try to reconnect if recording is active
+    if (!isRecordingActive) {
+      connectionError = 'Recording stopped';
+      return;
+    }
 
+    clearReconnectTimeout();
+    
     // Maximum of 10 reconnect attempts
     if (reconnectAttempt >= 10) {
       connectionError = 'Could not reconnect after multiple attempts';
       return;
     }
-
+    
     // Calculate delay with exponential backoff
     const delay = Math.min(10000, 1000 * Math.pow(1.5, reconnectAttempt));
     connectionError = `Connection lost. Reconnecting in ${Math.round(delay/1000)}s...`;
-
+    
     reconnectTimeout = setTimeout(async () => {
+      // Check again if recording is still active before attempting reconnect
+      if (!isRecordingActive) {
+        connectionError = 'Recording stopped';
+        return;
+      }
+
       connectionError = 'Attempting to reconnect...';
       reconnectAttempt++;
-
+      
       try {
         await transcriptWebSocket.resetAndReconnect(meetingId);
         isConnected = true;
@@ -119,7 +140,9 @@
         reconnectAttempt = 0;
       } catch (error) {
         console.error('Reconnect attempt failed:', error);
-        scheduleReconnect();
+        if (isRecordingActive) {
+          scheduleReconnect();
+        }
       }
     }, delay);
   }
@@ -217,8 +240,12 @@
           <button
             class="ml-2 text-xs py-1 px-2 rounded bg-blue-100 hover:bg-blue-200 text-blue-700"
             on:click={() => {
-              connectionError = 'Reconnecting...';
-              transcriptWebSocket.resetAndReconnect(meetingId);
+              if (isRecordingActive) {
+                connectionError = 'Reconnecting...';
+                transcriptWebSocket.resetAndReconnect(meetingId);
+              } else {
+                connectionError = 'Cannot reconnect: recording stopped';
+              }
             }}
           >
             Reconnect Now

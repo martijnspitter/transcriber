@@ -16,6 +16,8 @@ export interface Meeting {
   participants: string[];
   transcript_path?: string;
   summary_path?: string;
+  summary_content?: string;
+  current_transcript?: string;
 }
 
 export interface CreateMeetingRequest {

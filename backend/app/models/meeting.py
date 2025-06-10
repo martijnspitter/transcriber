@@ -24,6 +24,7 @@ class MeetingResponse(BaseModel):
     participants: List[str] = Field(default_factory=list)
     transcript_path: Optional[str] = None
     summary_path: Optional[str] = None
+    summary_content: Optional[str] = None
     current_transcript: Optional[str] = None
 
 class MeetingStatusResponse(BaseModel):
