@@ -3,13 +3,14 @@ import datetime
 import threading
 import time
 import logging
+import platform
 from pathlib import Path
 import numpy as np
-import sounddevice as sd
 from scipy.io import wavfile
 from faster_whisper import WhisperModel
 import ollama
 import asyncio
+from .audio_capture import AudioCaptureService
 
 # Configure logging
 logging.basicConfig(level=logging.INFO,
@@ -28,9 +29,18 @@ class TranscriberService:
         self.whisper_model = None
         self.sample_rate = 16000
 
+        # Initialize the audio capture service
+        self.audio_service = AudioCaptureService(sample_rate=self.sample_rate, output_dir=self.output_dir)
+
         # Real-time transcription
         self.live_transcription_callbacks = {}  # meeting_id -> list of callback functions
         self.real_time_interval = 5  # Process real-time transcription every 5 seconds
+
+        # Check for system audio capabilities
+        self.system_audio_available, self.system_audio_message = self.audio_service.check_system_audio_capture()
+        logger.info(f"System audio capture: {self.system_audio_available}")
+        if self.system_audio_message:
+            logger.info(self.system_audio_message)
 
         # Store the main event loop for use across threads
         try:
@@ -48,8 +58,19 @@ class TranscriberService:
 
             logger.info("Whisper model loaded successfully")
 
-    def start_meeting(self, meeting_id, title="Untitled Meeting", participants=None):
-        """Start recording a meeting"""
+    def start_meeting(self, meeting_id, title="Untitled Meeting", participants=None, device_id=None, capture_system_audio=False):
+        """Start recording a meeting
+
+        Args:
+            meeting_id (str): Unique identifier for the meeting
+            title (str): The meeting title
+            participants (list): List of participant names
+            device_id (int): Optional ID of audio device to use for recording
+            capture_system_audio (bool): Whether to attempt to capture system audio
+
+        Returns:
+            tuple: (success (bool), message (str))
+        """
 
         # Initialize participants if None
         if participants is None:
@@ -66,27 +87,28 @@ class TranscriberService:
             "start_time": datetime.datetime.now(),
             "status": "recording",
             "participants": participants,
-            "audio_data": [],
-            "thread": None,
-            "real_time_thread": None,
-            "stop_flag": threading.Event(),
-            "real_time_stop_flag": threading.Event(),
             "audio_file": None,
             "transcript_path": None,
             "summary_path": None,
             "current_transcript": "",
             "last_processed_chunk": 0,
-            "transcript_segments": []
+            "transcript_segments": [],
+            "real_time_thread": None,
+            "real_time_stop_flag": threading.Event(),
+            "device_id": device_id,
+            "using_system_audio": capture_system_audio
         }
 
         try:
-            # Start recording in a background thread
-            meeting_data["thread"] = threading.Thread(
-                target=self._record_meeting_audio,
-                args=(meeting_id, meeting_data["stop_flag"])
+            # Start audio recording using the audio service with specified options
+            success, message = self.audio_service.start_recording(
+                meeting_id, 
+                device_id=device_id,
+                capture_system_audio=capture_system_audio
             )
-            meeting_data["thread"].daemon = True
-            meeting_data["thread"].start()
+            if not success:
+                logger.error(f"Failed to start audio recording: {message}")
+                return False, message
 
             # Start real-time transcription thread
             meeting_data["real_time_thread"] = threading.Thread(
@@ -103,47 +125,7 @@ class TranscriberService:
             logger.error(f"Failed to start meeting: {e}")
             return False, f"Failed to start meeting: {str(e)}"
 
-    def _record_meeting_audio(self, meeting_id, stop_flag):
-        """Record audio in a background thread until stop_flag is set"""
-        try:
-            # Create a stream for recording audio
-            stream = sd.InputStream(
-                samplerate=self.sample_rate,
-                channels=1,
-                dtype='float32'
-            )
-
-            # Start the stream
-            stream.start()
-            logger.info(f"Recording started for meeting {meeting_id}")
-
-            # Record until stop flag is set
-            while not stop_flag.is_set():
-                # Read audio data
-                audio_chunk, overflowed = stream.read(self.sample_rate)
-                if overflowed:
-                    logger.warning("Audio buffer overflowed")
-
-                # Store the audio chunk if meeting still exists
-                if meeting_id in self.active_meetings:
-                    self.active_meetings[meeting_id]["audio_data"].append(audio_chunk.copy())
-                else:
-                    # Meeting was removed while recording
-                    logger.warning(f"Meeting {meeting_id} no longer exists, stopping recording")
-                    break
-
-                # Small delay to reduce CPU usage
-                time.sleep(0.1)
-
-            # Stop and close the stream
-            stream.stop()
-            stream.close()
-            logger.info(f"Recording stopped for meeting {meeting_id}")
-
-        except Exception as e:
-            logger.error(f"Error in recording thread: {e}")
-            if meeting_id in self.active_meetings:
-                self.active_meetings[meeting_id]["status"] = "error"
+    # The _record_meeting_audio method has been moved to AudioCaptureService
 
     def stop_meeting(self, meeting_id):
         """Stop recording a meeting and start processing"""
@@ -156,12 +138,15 @@ class TranscriberService:
             return False, f"Meeting is not recording, current status: {meeting['status']}"
 
         try:
-            # Set stop flags and wait for threads to finish
-            meeting["stop_flag"].set()
+            # Stop audio recording using the audio service
+            success, message = self.audio_service.stop_recording(meeting_id)
+            if not success:
+                logger.error(f"Failed to stop audio recording: {message}")
+                return False, message
+
+            # Set real-time transcription stop flag and wait for thread to finish
             meeting["real_time_stop_flag"].set()
-            if meeting["thread"].is_alive():
-                meeting["thread"].join(timeout=5.0)
-            if meeting["real_time_thread"].is_alive():
+            if meeting["real_time_thread"] and meeting["real_time_thread"].is_alive():
                 meeting["real_time_thread"].join(timeout=5.0)
 
             # Update meeting data
@@ -190,14 +175,14 @@ class TranscriberService:
             meeting = self.active_meetings[meeting_id]
 
             try:
-                # Combine audio chunks
-                if not meeting["audio_data"]:
+                # Get audio data from the audio service
+                success, result = self.audio_service.get_audio_data(meeting_id)
+                if not success:
                     meeting["status"] = "error"
-                    logger.error(f"No audio data recorded for meeting {meeting_id}")
+                    logger.error(f"No audio data recorded for meeting {meeting_id}: {result}")
                     return
 
-                # Concatenate all audio chunks
-                audio_data = np.concatenate(meeting["audio_data"])
+                audio_data = result
 
                 # Generate filenames with timestamps
                 timestamp = meeting["start_time"].strftime("%Y-%m-%d_%H-%M-%S")
@@ -234,6 +219,7 @@ class TranscriberService:
 
                 # Store the summary content in memory for UI display before writing to file
                 meeting["summary_content"] = summary
+                logger.info(f"Transcript for meeting {meeting_id}:\n{transcript}")
                 logger.info(f"Summary for meeting {meeting_id}: {summary}")
 
                 # Save transcript and summary as markdown files
@@ -293,7 +279,7 @@ class TranscriberService:
             response = ollama.chat(model='mistral', messages=[
                 {
                     'role': 'system',
-                    'content': 'You are an assistant that summarizes meeting transcripts concisely, highlighting key points, action items, and decisions made.'
+                    'content': 'You are an assistant that summarizes meeting transcripts concisely, highlighting key points, action items, and decisions made. If the transcript is too long, focus on the most important parts and provide a brief summary. If the transcript is very short, provide a detailed summary with all relevant information. If the transcript is empty or contains no meaningful content, return "No content to summarize."'
                 },
                 {
                     'role': 'user',
@@ -338,6 +324,9 @@ class TranscriberService:
             # Ensure model is loaded
             self._load_whisper_model()
 
+            # Track the last processed chunk
+            last_processed_index = 0
+
             logger.info(f"Starting real-time transcription for meeting {meeting_id}")
 
             while not stop_flag.is_set():
@@ -347,38 +336,35 @@ class TranscriberService:
 
                 meeting = self.active_meetings[meeting_id]
 
-                # If we have enough new audio data
-                if len(meeting["audio_data"]) > meeting["last_processed_chunk"] + 10:  # Process after ~10 seconds of new audio
-                    # Get only the new audio data
-                    start_idx = meeting["last_processed_chunk"]
-                    audio_chunks = meeting["audio_data"][start_idx:]
+                # Get new audio data from the audio service
+                success, result, new_index = self.audio_service.get_chunk_since_index(meeting_id, last_processed_index)
 
-                    if audio_chunks:
-                        # Process the new audio data
-                        try:
-                            # Concatenate audio chunks
-                            audio_data = np.concatenate(audio_chunks)
+                # Process if we have new data (result is not None) and the request was successful
+                if success and result is not None:
+                    # Process the new audio data
+                    try:
+                        # Save temporary audio file
+                        temp_audio_file = os.path.join(self.output_dir, f"{meeting_id}_temp.wav")
+                        audio_data_int16 = np.int16(result * 32767)
+                        wavfile.write(temp_audio_file, self.sample_rate, audio_data_int16)
 
-                            # Save temporary audio file
-                            temp_audio_file = os.path.join(self.output_dir, f"{meeting_id}_temp.wav")
-                            audio_data_int16 = np.int16(audio_data * 32767)
-                            wavfile.write(temp_audio_file, self.sample_rate, audio_data_int16)
+                        # Transcribe the audio
+                        partial_transcript, partial_segments = self._transcribe_audio(temp_audio_file)
 
-                            # Transcribe the audio
-                            partial_transcript, partial_segments = self._transcribe_audio(temp_audio_file)
+                        # Update the transcript for the meeting
+                        meeting["current_transcript"] += partial_transcript
 
-                            # Update the transcript for the meeting
-                            meeting["current_transcript"] += partial_transcript
-                            meeting["last_processed_chunk"] = len(meeting["audio_data"])
+                        # Update index for next time
+                        last_processed_index = new_index
 
-                            # Notify all registered callbacks about the new transcript
-                            self._notify_transcript_update(meeting_id, meeting["current_transcript"], partial_transcript)
+                        # Notify all registered callbacks about the new transcript
+                        self._notify_transcript_update(meeting_id, meeting["current_transcript"], partial_transcript)
 
-                            # Clean up temporary file
-                            os.remove(temp_audio_file)
+                        # Clean up temporary file
+                        os.remove(temp_audio_file)
 
-                        except Exception as e:
-                            logger.error(f"Error in real-time transcription: {e}")
+                    except Exception as e:
+                        logger.error(f"Error in real-time transcription: {e}")
 
                 # Sleep to avoid high CPU usage
                 time.sleep(2)
@@ -436,3 +422,42 @@ class TranscriberService:
                         callback(meeting_id, full_transcript, new_text)
                 except Exception as e:
                     logger.error(f"Error in transcript callback: {e}")
+                    
+    def get_audio_devices(self):
+        """
+        Get a list of all available audio input devices
+        
+        Returns:
+            list: List of dictionaries with device information
+        """
+        return self.audio_service.get_available_devices()
+    
+    def set_audio_device(self, device_id):
+        """
+        Set the device to use for audio capture
+        
+        Args:
+            device_id (int): The ID of the device to use
+            
+        Returns:
+            tuple: (success (bool), message (str))
+        """
+        return self.audio_service.set_input_device(device_id)
+    
+    def get_system_audio_status(self):
+        """
+        Get information about system audio capture capabilities
+        
+        Returns:
+            dict: System audio capture status and recommendations
+        """
+        return self.audio_service.get_system_audio_status()
+        
+    def refresh_audio_devices(self):
+        """
+        Refresh the list of available audio devices
+        
+        Returns:
+            bool: Whether the refresh was successful
+        """
+        return self.audio_service.update_device_info()
