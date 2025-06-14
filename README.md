@@ -33,8 +33,9 @@ Meeting Transcriber is a solution for capturing, transcribing, and summarizing m
   - Good performance-to-resource ratio
   - High-quality summarization capabilities
 
-- **Python Audio Libraries**:
-  - `sounddevice`: Clean audio capture interface
+- **Audio Capture**:
+  - macOS Core Audio APIs via PyObjC for simultaneous microphone + system audio
+  - `sounddevice`: Cross-platform audio capture interface
   - `scipy`: Audio file processing
   - ThreadPoolExecutor for non-blocking audio processing
 
@@ -60,7 +61,7 @@ The project currently includes:
   - Retrieving meeting status
   - Listing all meetings
 
-- **Audio Processing**: Recording, saving, and processing meeting audio
+- **Audio Processing**: Recording, saving, and processing meeting audio (including simultaneous microphone and system audio capture on macOS)
 - **Transcription Engine**: Integration with Whisper for speech-to-text
 - **Summarization**: Text processing with Ollama/Mistral or fallback methods
 
@@ -72,6 +73,7 @@ The project currently includes:
 - pip
 - FFmpeg (for audio processing)
 - Ollama (optional, for better summaries)
+- PyObjC (automatically installed, required for macOS audio capture)
 
 ### Setup
 
@@ -113,6 +115,7 @@ The project currently includes:
 
 ### Phase 1: Core Functionality ✅
 - ✅ Audio capture from system
+- ✅ Simultaneous microphone + system audio capture on macOS
 - ✅ Transcription with Whisper
 - ✅ Summary generation with Mistral
 - ✅ Backend API with FastAPI

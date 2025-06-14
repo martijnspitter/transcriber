@@ -3,14 +3,13 @@ import datetime
 import threading
 import time
 import logging
-import platform
 from pathlib import Path
 import numpy as np
 from scipy.io import wavfile
 from faster_whisper import WhisperModel
 import ollama
 import asyncio
-from .audio_capture import AudioCaptureService
+from .audio_manager import AudioManager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO,
@@ -29,15 +28,19 @@ class TranscriberService:
         self.whisper_model = None
         self.sample_rate = 16000
 
-        # Initialize the audio capture service
-        self.audio_service = AudioCaptureService(sample_rate=self.sample_rate, output_dir=self.output_dir)
+        # Initialize the audio manager service
+        self.audio_service = AudioManager(sample_rate=self.sample_rate, output_dir=self.output_dir)
 
         # Real-time transcription
         self.live_transcription_callbacks = {}  # meeting_id -> list of callback functions
         self.real_time_interval = 5  # Process real-time transcription every 5 seconds
 
         # Check for system audio capabilities
-        self.system_audio_available, self.system_audio_message = self.audio_service.check_system_audio_capture()
+        if hasattr(self.audio_service, 'check_system_audio_capture'):
+            self.system_audio_available, self.system_audio_message = self.audio_service.check_system_audio_capture()
+        else:
+            self.system_audio_available = self.audio_service.system_audio_available
+            self.system_audio_message = "System audio capture available via macOS Core Audio"
         logger.info(f"System audio capture: {self.system_audio_available}")
         if self.system_audio_message:
             logger.info(self.system_audio_message)
@@ -102,7 +105,7 @@ class TranscriberService:
         try:
             # Start audio recording using the audio service with specified options
             success, message = self.audio_service.start_recording(
-                meeting_id, 
+                meeting_id,
                 device_id=device_id,
                 capture_system_audio=capture_system_audio
             )
@@ -422,41 +425,41 @@ class TranscriberService:
                         callback(meeting_id, full_transcript, new_text)
                 except Exception as e:
                     logger.error(f"Error in transcript callback: {e}")
-                    
+
     def get_audio_devices(self):
         """
         Get a list of all available audio input devices
-        
+
         Returns:
             list: List of dictionaries with device information
         """
         return self.audio_service.get_available_devices()
-    
+
     def set_audio_device(self, device_id):
         """
         Set the device to use for audio capture
-        
+
         Args:
             device_id (int): The ID of the device to use
-            
+
         Returns:
             tuple: (success (bool), message (str))
         """
         return self.audio_service.set_input_device(device_id)
-    
+
     def get_system_audio_status(self):
         """
         Get information about system audio capture capabilities
-        
+
         Returns:
             dict: System audio capture status and recommendations
         """
         return self.audio_service.get_system_audio_status()
-        
+
     def refresh_audio_devices(self):
         """
         Refresh the list of available audio devices
-        
+
         Returns:
             bool: Whether the refresh was successful
         """
