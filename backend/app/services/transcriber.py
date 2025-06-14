@@ -61,7 +61,7 @@ class TranscriberService:
 
             logger.info("Whisper model loaded successfully")
 
-    def start_meeting(self, meeting_id, title="Untitled Meeting", participants=None, device_id=None, capture_system_audio=False):
+    def start_meeting(self, meeting_id, title="Untitled Meeting", participants=None, device_id=None, capture_system_audio=True):
         """Start recording a meeting
 
         Args:
@@ -69,11 +69,15 @@ class TranscriberService:
             title (str): The meeting title
             participants (list): List of participant names
             device_id (int): Optional ID of audio device to use for recording
-            capture_system_audio (bool): Whether to attempt to capture system audio
+            capture_system_audio (bool): Whether to attempt to capture system audio (default: True)
 
         Returns:
             tuple: (success (bool), message (str))
         """
+
+        # If system audio is requested, ensure permissions are set up
+        if capture_system_audio and hasattr(self.audio_service, 'show_screen_recording_permission_dialog'):
+            self.audio_service.show_screen_recording_permission_dialog()
 
         # Initialize participants if None
         if participants is None:
@@ -179,13 +183,17 @@ class TranscriberService:
 
             try:
                 # Get audio data from the audio service
-                success, result = self.audio_service.get_audio_data(meeting_id)
+                success, audio_data, message = self.audio_service.get_audio_data(meeting_id)
                 if not success:
                     meeting["status"] = "error"
-                    logger.error(f"No audio data recorded for meeting {meeting_id}: {result}")
+                    logger.error(f"No audio data recorded for meeting {meeting_id}: {message}")
                     return
 
-                audio_data = result
+                # Check if the audio data is valid
+                if audio_data is None or not isinstance(audio_data, np.ndarray) or audio_data.size == 0:
+                    meeting["status"] = "error"
+                    logger.error(f"Audio data invalid for meeting {meeting_id}")
+                    return
 
                 # Generate filenames with timestamps
                 timestamp = meeting["start_time"].strftime("%Y-%m-%d_%H-%M-%S")
@@ -194,10 +202,15 @@ class TranscriberService:
 
                 # Save audio file
                 audio_file = os.path.join(self.output_dir, f"{base_filename}.wav")
-                audio_data = np.int16(audio_data * 32767)  # Convert to int16
-                wavfile.write(audio_file, self.sample_rate, audio_data)
-                meeting["audio_file"] = audio_file
-                logger.info(f"Audio saved to {audio_file}")
+                try:
+                    audio_data = np.int16(audio_data * 32767)  # Convert to int16
+                    wavfile.write(audio_file, self.sample_rate, audio_data)
+                    meeting["audio_file"] = audio_file
+                    logger.info(f"Audio saved to {audio_file}")
+                except Exception as e:
+                    meeting["status"] = "error"
+                    logger.error(f"Failed to save audio file for meeting {meeting_id}: {e}")
+                    return
 
                 # Load Whisper model if needed
                 try:
@@ -209,8 +222,15 @@ class TranscriberService:
 
                 # Transcribe audio
                 logger.info(f"Transcribing meeting {meeting_id}")
-                transcript, segments = self._transcribe_audio(audio_file)
-                meeting["transcript_segments"] = segments
+                try:
+                    transcript, segments = self._transcribe_audio(audio_file)
+                    meeting["transcript_segments"] = segments
+                except Exception as e:
+                    logger.error(f"Failed to transcribe audio for meeting {meeting_id}: {e}")
+                    meeting["status"] = "error"
+                    meeting["transcript_segments"] = []
+                    meeting["current_transcript"] = "Transcription failed"
+                    return
 
                 # Summarize transcript
                 logger.info(f"Summarizing meeting {meeting_id}")
@@ -325,7 +345,11 @@ class TranscriberService:
         """Worker thread for real-time transcription"""
         try:
             # Ensure model is loaded
-            self._load_whisper_model()
+            try:
+                self._load_whisper_model()
+            except Exception as e:
+                logger.error(f"Failed to load Whisper model for real-time transcription: {e}")
+                return
 
             # Track the last processed chunk
             last_processed_index = 0
@@ -340,19 +364,46 @@ class TranscriberService:
                 meeting = self.active_meetings[meeting_id]
 
                 # Get new audio data from the audio service
-                success, result, new_index = self.audio_service.get_chunk_since_index(meeting_id, last_processed_index)
+                try:
+                    success, result, new_index = self.audio_service.get_chunk_since_index(meeting_id, last_processed_index)
+                except ValueError as e:
+                    # Handle case where method returns more or fewer values than expected
+                    logger.error(f"Error getting audio chunks: {e}")
+                    time.sleep(2)
+                    continue
+                except Exception as e:
+                    logger.error(f"Unexpected error getting audio chunks: {e}")
+                    time.sleep(2)
+                    continue
 
                 # Process if we have new data (result is not None) and the request was successful
                 if success and result is not None:
                     # Process the new audio data
                     try:
+                        # Check if audio data is valid
+                        if not isinstance(result, np.ndarray) or result.size == 0:
+                            logger.warning(f"Invalid audio data received for meeting {meeting_id}, skipping chunk")
+                            last_processed_index = new_index
+                            continue
+
                         # Save temporary audio file
                         temp_audio_file = os.path.join(self.output_dir, f"{meeting_id}_temp.wav")
                         audio_data_int16 = np.int16(result * 32767)
                         wavfile.write(temp_audio_file, self.sample_rate, audio_data_int16)
 
+                        # Check if file was created successfully
+                        if not os.path.exists(temp_audio_file) or os.path.getsize(temp_audio_file) < 100:
+                            logger.warning(f"Failed to create valid temp audio file for meeting {meeting_id}, skipping chunk")
+                            last_processed_index = new_index
+                            continue
+
                         # Transcribe the audio
-                        partial_transcript, partial_segments = self._transcribe_audio(temp_audio_file)
+                        try:
+                            partial_transcript, partial_segments = self._transcribe_audio(temp_audio_file)
+                        except Exception as transc_error:
+                            logger.error(f"Transcription error for chunk: {transc_error}")
+                            last_processed_index = new_index
+                            continue
 
                         # Update the transcript for the meeting
                         meeting["current_transcript"] += partial_transcript
@@ -364,10 +415,16 @@ class TranscriberService:
                         self._notify_transcript_update(meeting_id, meeting["current_transcript"], partial_transcript)
 
                         # Clean up temporary file
-                        os.remove(temp_audio_file)
+                        try:
+                            if os.path.exists(temp_audio_file):
+                                os.remove(temp_audio_file)
+                        except Exception as cleanup_error:
+                            logger.warning(f"Failed to clean up temporary file: {cleanup_error}")
 
                     except Exception as e:
                         logger.error(f"Error in real-time transcription: {e}")
+                        # Continue processing despite errors
+                        last_processed_index = new_index
 
                 # Sleep to avoid high CPU usage
                 time.sleep(2)

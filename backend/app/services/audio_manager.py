@@ -7,8 +7,9 @@ logger = logging.getLogger(__name__)
 
 class AudioManager:
     """
-    Audio Manager that selects and initializes the appropriate audio capture service
-    based on the current platform and available dependencies.
+    Audio Manager that initializes the appropriate audio capture service
+    based on the current platform. For this implementation, we're focusing
+    only on macOS since that's the platform we're targeting.
     """
 
     def __init__(self, sample_rate=16000, output_dir=None):
@@ -32,9 +33,14 @@ class AudioManager:
         # Initialize the appropriate audio capture service
         self.audio_service = self._init_audio_service(sample_rate, self.output_dir)
 
+        # Set system audio availability flag for easy reference
+        self.system_audio_available = getattr(self.audio_service, 'system_audio_available', False)
+
     def _init_audio_service(self, sample_rate, output_dir):
         """
-        Initialize and return the appropriate audio capture service based on platform.
+        Initialize and return the appropriate audio capture service.
+        Since we're focusing only on macOS, this will always try to use
+        the macOS-specific implementation first.
 
         Args:
             sample_rate (int): The sample rate to use for audio recording
@@ -46,18 +52,17 @@ class AudioManager:
         if self.system == "Darwin":  # macOS
             try:
                 from .macos_audio_capture import MacOSAudioCaptureService
-                logger.info("Using MacOS-specific audio capture service")
+                logger.info("Using macOS-specific audio capture service")
                 return MacOSAudioCaptureService(sample_rate, output_dir)
             except ImportError as e:
-                logger.warning(f"Could not import MacOSAudioCaptureService: {e}")
-                logger.info("Falling back to generic audio capture service")
-                from .audio_capture import AudioCaptureService
-                return AudioCaptureService(sample_rate, output_dir)
+                logger.error(f"Could not import MacOSAudioCaptureService: {e}")
+                logger.error("This application requires macOS to function properly")
+                # We're not falling back to a generic service since we're targeting only macOS
+                raise ImportError("MacOS audio capture service could not be initialized") from e
         else:
-            # For Windows, Linux, and other platforms, use the standard service
-            from .audio_capture import AudioCaptureService
-            logger.info(f"Using standard audio capture service for {self.system}")
-            return AudioCaptureService(sample_rate, output_dir)
+            # Since we're only targeting macOS, we'll raise an error for other platforms
+            logger.error(f"Unsupported platform: {self.system}. This application requires macOS.")
+            raise NotImplementedError(f"Platform {self.system} is not supported. This application requires macOS.")
 
     def __getattr__(self, name):
         """
@@ -84,7 +89,7 @@ class AudioManager:
             "platform": self.system,
             "service_type": self.audio_service.__class__.__name__,
             "output_dir": self.output_dir,
-            "system_audio_available": self.audio_service.system_audio_available
+            "system_audio_available": self.system_audio_available
         }
 
     def supports_simultaneous_capture(self):
@@ -95,7 +100,5 @@ class AudioManager:
         Returns:
             bool: True if simultaneous capture is supported, False otherwise
         """
-        # MacOS service supports simultaneous capture
-        return self.system == "Darwin" and \
-               self.audio_service.__class__.__name__ == "MacOSAudioCaptureService" and \
-               self.audio_service.system_audio_available
+        # Only macOS support is implemented, and it supports simultaneous capture
+        return self.system == "Darwin" and self.system_audio_available
