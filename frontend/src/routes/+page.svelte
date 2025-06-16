@@ -5,9 +5,9 @@ import {
   pollMeetingUntilComplete,
   type Meeting
 } from "../services/api";
-import LiveTranscription from '../components/LiveTranscription.svelte';
+import RecordingStatus from '../components/RecordingStatus.svelte';
 import {  onDestroy } from 'svelte';
-import { transcriptWebSocket } from '../services/websocket';
+import { statusWebSocket } from '../services/websocket';
 
 let isRecording = false;
 let meetingTitle = "New Meeting";
@@ -67,7 +67,7 @@ async function stopRecording() {
 
     // Ensure WebSocket connections are properly closed
     try {
-      transcriptWebSocket.disconnect(true);
+      statusWebSocket.disconnect(true);
     } catch (e) {
       console.warn("Error disconnecting WebSocket:", e);
     }
@@ -77,7 +77,7 @@ async function stopRecording() {
     transcriptText = "Processing your meeting recording...";
 
     // Ensure WebSocket connections are properly closed when recording stops
-    transcriptWebSocket.disconnect(true);
+    statusWebSocket.disconnect(true);
 
     // Poll for meeting status until complete
     try {
@@ -131,7 +131,7 @@ onDestroy(() => {
   }
 
   // Ensure all WebSocket connections are properly closed
-  transcriptWebSocket.disconnect(true);
+  statusWebSocket.disconnect(true);
 
   // If recording is active when component is destroyed, try to stop it
   if (isRecording && currentMeetingId) {
@@ -214,11 +214,10 @@ onDestroy(() => {
       {/if}
 
       {#if isRecording && currentMeetingId}
-        <!-- Live transcription during recording -->
-        <div class="h-64 mb-4 border rounded-lg overflow-hidden">
-          <LiveTranscription
+        <!-- Recording status during recording -->
+        <div class="mb-4 border rounded-lg overflow-hidden h-fit">
+          <RecordingStatus
             meetingId={currentMeetingId}
-            initialTranscript=""
             isRecordingActive={isRecording}
           />
         </div>
@@ -247,8 +246,7 @@ onDestroy(() => {
         </div>
       {:else}
         <div class="bg-gray-50 p-4 rounded border text-center text-gray-500">
-          <p>Start recording a meeting to see the transcription here</p>
-          <p class="text-xs mt-2">Real-time transcription will appear as you speak</p>
+          <p>Start recording a meeting</p>
         </div>
       {/if}
 

@@ -17,20 +17,23 @@ transcriber_service = TranscriberService()
 # Store active WebSocket connections
 active_connections: Dict[str, List[WebSocket]] = {}
 
-# Callback function for transcription updates
-async def transcription_update_callback(meeting_id: str, full_transcript: str, new_text: str):
-    """Callback function that sends transcription updates to connected WebSocket clients"""
+# Callback function for status updates
+async def status_update_callback(meeting_id: str, status_data: dict):
+    """Callback function that sends recording status updates to connected WebSocket clients"""
     if meeting_id in active_connections and active_connections[meeting_id]:
-        # Create timestamp for the update
-        timestamp = datetime.now().isoformat()
+        # Create timestamp for the update if not already present
+        if "last_status_update" not in status_data:
+            status_data["last_status_update"] = datetime.now().isoformat()
 
         # Prepare the message
         message = {
-            "event": "transcript_update",
+            "event": "status_update",
             "meeting_id": meeting_id,
-            "full_transcript": full_transcript,
-            "new_text": new_text,
-            "timestamp": timestamp
+            "status": status_data.get("status", "recording"),
+            "recording_duration": status_data.get("recording_duration", 0),
+            "audio_devices": status_data.get("audio_devices", []),
+            "audio_problems": status_data.get("audio_problems", []),
+            "timestamp": status_data.get("last_status_update")
         }
 
         # Send to all connected clients
@@ -84,7 +87,9 @@ async def create_meeting(meeting_data: MeetingCreate):
             transcript_path=None,
             summary_path=None,
             summary_content=None,
-            current_transcript=""
+            recording_duration=meeting_status.get("recording_duration", 0),
+            audio_devices=meeting_status.get("audio_devices", []),
+            audio_problems=meeting_status.get("audio_problems", [])
         )
     except Exception as e:
         logger.error(f"Error creating meeting: {e}")
@@ -162,7 +167,9 @@ async def get_meeting(meeting_id: str):
             transcript_path=meeting_status.get("transcript_path"),
             summary_path=meeting_status.get("summary_path"),
             summary_content=meeting_status.get("summary_content"),
-            current_transcript=meeting_status.get("current_transcript", "")
+            recording_duration=meeting_status.get("recording_duration", 0),
+            audio_devices=meeting_status.get("audio_devices", []),
+            audio_problems=meeting_status.get("audio_problems", [])
         )
     except HTTPException:
         # Re-raise HTTP exceptions
@@ -193,7 +200,10 @@ async def get_all_meetings():
                     participants=m["participants"],
                     transcript_path=m.get("transcript_path"),
                     summary_path=m.get("summary_path"),
-                    summary_content=m.get("summary_content")
+                    summary_content=m.get("summary_content"),
+                    recording_duration=m.get("recording_duration", 0),
+                    audio_devices=m.get("audio_devices", []),
+                    audio_problems=m.get("audio_problems", [])
                 ))
 
         return result
@@ -205,15 +215,15 @@ async def get_all_meetings():
         )
 
 
-@router.websocket("/ws/meetings/{meeting_id}/transcript")
-async def websocket_transcript(websocket: WebSocket, meeting_id: str):
-    """WebSocket endpoint for real-time transcript updates"""
+@router.websocket("/ws/meetings/{meeting_id}/status")
+async def websocket_status(websocket: WebSocket, meeting_id: str):
+    """WebSocket endpoint for real-time status updates"""
     await websocket.accept()
 
     try:
         # Check if meeting exists
-        meeting_status = transcriber_service.get_meeting_status(meeting_id)
-        if not meeting_status:
+        meeting_data = transcriber_service.get_meeting_status(meeting_id)
+        if not meeting_data:
             await websocket.send_json({"error": f"Meeting {meeting_id} not found"})
             await websocket.close()
             return
@@ -223,17 +233,20 @@ async def websocket_transcript(websocket: WebSocket, meeting_id: str):
             active_connections[meeting_id] = []
         active_connections[meeting_id].append(websocket)
 
-        # Register callback for transcription updates
-        transcriber_service.register_transcript_callback(meeting_id, transcription_update_callback)
+        # Register callback for status updates
+        transcriber_service.register_status_callback(meeting_id, status_update_callback)
 
-        # Send initial transcript if available
-        if meeting_status.get("current_transcript"):
-            await websocket.send_json({
-                "event": "initial_transcript",
-                "meeting_id": meeting_id,
-                "transcript": meeting_status["current_transcript"],
-                "timestamp": datetime.now().isoformat()
-            })
+        # Send initial status immediately
+        status_message = {
+            "event": "initial_status",
+            "meeting_id": meeting_id,
+            "status": meeting_data.get("status", "recording"),
+            "recording_duration": meeting_data.get("recording_duration", 0),
+            "audio_devices": meeting_data.get("audio_devices", []),
+            "audio_problems": meeting_data.get("audio_problems", []),
+            "timestamp": datetime.now().isoformat()
+        }
+        await websocket.send_json(status_message)
 
         # Keep the connection alive until client disconnects
         try:
@@ -251,7 +264,7 @@ async def websocket_transcript(websocket: WebSocket, meeting_id: str):
                 active_connections[meeting_id].remove(websocket)
             # Unregister callback when all clients disconnect
             if not active_connections.get(meeting_id):
-                transcriber_service.unregister_transcript_callback(meeting_id, transcription_update_callback)
+                transcriber_service.unregister_status_callback(meeting_id, status_update_callback)
 
     except Exception as e:
         logger.error(f"Error in WebSocket connection: {e}")

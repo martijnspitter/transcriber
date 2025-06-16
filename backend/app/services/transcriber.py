@@ -31,9 +31,13 @@ class TranscriberService:
         # Initialize the audio manager service
         self.audio_service = AudioManager(sample_rate=self.sample_rate, output_dir=self.output_dir)
 
-        # Real-time transcription
+        # Real-time transcription (keeping for backward compatibility)
         self.live_transcription_callbacks = {}  # meeting_id -> list of callback functions
         self.real_time_interval = 5  # Process real-time transcription every 5 seconds
+
+        # Status updates
+        self.status_update_callbacks = {}  # meeting_id -> list of callback functions
+        self.status_update_interval = 2  # Send status updates every 2 seconds
 
         # Check for system audio capabilities
         if hasattr(self.audio_service, 'check_system_audio_capture'):
@@ -97,9 +101,9 @@ class TranscriberService:
             "audio_file": None,
             "transcript_path": None,
             "summary_path": None,
-            "current_transcript": "",
-            "last_processed_chunk": 0,
-            "transcript_segments": [],
+            "audio_devices": [],
+            "audio_problems": [],
+            "recording_duration": 0,
             "real_time_thread": None,
             "real_time_stop_flag": threading.Event(),
             "device_id": device_id,
@@ -117,9 +121,9 @@ class TranscriberService:
                 logger.error(f"Failed to start audio recording: {message}")
                 return False, message
 
-            # Start real-time transcription thread
+            # Start status update thread
             meeting_data["real_time_thread"] = threading.Thread(
-                target=self._real_time_transcription_worker,
+                target=self._status_update_worker,
                 args=(meeting_id, meeting_data["real_time_stop_flag"])
             )
             meeting_data["real_time_thread"].daemon = True
@@ -322,6 +326,21 @@ class TranscriberService:
 
         meeting = self.active_meetings[meeting_id]
 
+        # Calculate recording duration for active meetings
+        if meeting["status"] == "recording":
+            start_time = meeting["start_time"]
+            current_time = datetime.datetime.now()
+            if isinstance(start_time, str):
+                try:
+                    start_time = datetime.datetime.fromisoformat(start_time)
+                except ValueError:
+                    try:
+                        start_time = datetime.datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S.%f")
+                    except ValueError:
+                        start_time = current_time  # Fallback
+            if isinstance(start_time, datetime.datetime):
+                meeting["recording_duration"] = (current_time - start_time).total_seconds()
+
         return {
             "id": meeting["id"],
             "title": meeting["title"],
@@ -332,6 +351,10 @@ class TranscriberService:
             "participants": meeting["participants"],
             "transcript_path": meeting.get("transcript_path"),
             "summary_path": meeting.get("summary_path"),
+            "recording_duration": meeting.get("recording_duration", 0),
+            "audio_devices": meeting.get("audio_devices", []),
+            "audio_problems": meeting.get("audio_problems", []),
+            "last_status_update": meeting.get("last_status_update", datetime.datetime.now().isoformat()),
             "summary_content": meeting.get("summary_content"),
             "current_transcript": meeting.get("current_transcript", ""),
             "transcript_segments": meeting.get("transcript_segments", [])
@@ -341,103 +364,138 @@ class TranscriberService:
         """Get status for all meetings"""
         return [self.get_meeting_status(meeting_id) for meeting_id in self.active_meetings]
 
-    def _real_time_transcription_worker(self, meeting_id, stop_flag):
-        """Worker thread for real-time transcription"""
+    def _status_update_worker(self, meeting_id, stop_flag):
+        """Worker thread for sending status updates about recording health"""
         try:
-            # Ensure model is loaded
-            try:
-                self._load_whisper_model()
-            except Exception as e:
-                logger.error(f"Failed to load Whisper model for real-time transcription: {e}")
-                return
-
-            # Track the last processed chunk
-            last_processed_index = 0
-
-            logger.info(f"Starting real-time transcription for meeting {meeting_id}")
+            logger.info(f"Starting status updates for meeting {meeting_id}")
+            no_signal_count = 0  # Counter to track consecutive silent audio checks
 
             while not stop_flag.is_set():
                 if meeting_id not in self.active_meetings:
-                    logger.warning(f"Meeting {meeting_id} no longer exists, stopping real-time transcription")
+                    logger.warning(f"Meeting {meeting_id} no longer exists, stopping status updates")
                     break
 
                 meeting = self.active_meetings[meeting_id]
 
-                # Get new audio data from the audio service
+                # Update meeting duration
+                start_time = meeting.get("start_time")
+                current_time = datetime.datetime.now()
+                if start_time:
+                    if isinstance(start_time, str):
+                        try:
+                            start_time = datetime.datetime.fromisoformat(start_time)
+                        except ValueError:
+                            try:
+                                start_time = datetime.datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S.%f")
+                            except ValueError:
+                                start_time = current_time  # Fallback if parsing fails
+                    meeting["recording_duration"] = (current_time - start_time).total_seconds()
+
+                # Check audio health
+                audio_problems = []
+
+                # Get audio devices information
                 try:
-                    success, result, new_index = self.audio_service.get_chunk_since_index(meeting_id, last_processed_index)
-                except ValueError as e:
-                    # Handle case where method returns more or fewer values than expected
-                    logger.error(f"Error getting audio chunks: {e}")
-                    time.sleep(2)
-                    continue
+                    # Only add the specific device being used for this meeting
+                    formatted_devices = []
+
+                    # Add the microphone device being used (if available)
+                    device_id = meeting.get("device_id")
+                    if device_id is not None:
+                        # Try to get the actual device name from the audio service
+                        device_name = "Microphone"
+                        if hasattr(self.audio_service, "get_device_name"):
+                            try:
+                                device_name = self.audio_service.get_device_name(device_id) or "Microphone"
+                            except:
+                                pass
+
+                        formatted_devices.append({
+                            "id": str(device_id),
+                            "name": device_name,
+                            "type": "microphone"
+                        })
+
+                    # Add system audio if it's being used for this meeting
+                    if meeting.get("using_system_audio") and self.system_audio_available:
+                        formatted_devices.append({
+                            "id": "system_audio",
+                            "name": "System Audio",
+                            "type": "system"
+                        })
+
+                    meeting["audio_devices"] = formatted_devices
+
+                    # Check if no devices are connected
+                    devices = self.get_audio_devices()
+                    if not devices:
+                        audio_problems.append("No audio input devices detected")
                 except Exception as e:
-                    logger.error(f"Unexpected error getting audio chunks: {e}")
-                    time.sleep(2)
-                    continue
+                    logger.error(f"Error getting audio devices: {e}")
+                    audio_problems.append("Error detecting audio devices")
 
-                # Process if we have new data (result is not None) and the request was successful
-                if success and result is not None:
-                    # Process the new audio data
-                    try:
-                        # Check if audio data is valid
-                        if not isinstance(result, np.ndarray) or result.size == 0:
-                            logger.warning(f"Invalid audio data received for meeting {meeting_id}, skipping chunk")
-                            last_processed_index = new_index
-                            continue
+                # Check for audio signal by examining if recent audio contains silence
+                # We do this by checking if audio is being recorded correctly
+                try:
+                    # Check if we can access the meeting's recording
+                    is_recording_active = meeting.get("status") == "recording"
 
-                        # Save temporary audio file
-                        temp_audio_file = os.path.join(self.output_dir, f"{meeting_id}_temp.wav")
-                        audio_data_int16 = np.int16(result * 32767)
-                        wavfile.write(temp_audio_file, self.sample_rate, audio_data_int16)
+                    if is_recording_active:
+                        # Check if recording service is active
+                        if hasattr(self.audio_service, 'is_recording') and callable(getattr(self.audio_service, 'is_recording')):
+                            if not self.audio_service.is_recording(meeting_id):
+                                audio_problems.append("Recording service not active")
 
-                        # Check if file was created successfully
-                        if not os.path.exists(temp_audio_file) or os.path.getsize(temp_audio_file) < 100:
-                            logger.warning(f"Failed to create valid temp audio file for meeting {meeting_id}, skipping chunk")
-                            last_processed_index = new_index
-                            continue
-
-                        # Transcribe the audio
+                        # Check for silence by attempting to get recent audio data
                         try:
-                            partial_transcript, partial_segments = self._transcribe_audio(temp_audio_file)
-                        except Exception as transc_error:
-                            logger.error(f"Transcription error for chunk: {transc_error}")
-                            last_processed_index = new_index
-                            continue
+                            # We don't want to add more functionality that could break audio capture
+                            # Just check if audio service is responding correctly
+                            is_ok = self.audio_service.get_recording_status(meeting_id) if hasattr(self.audio_service, 'get_recording_status') else True
 
-                        # Update the transcript for the meeting
-                        meeting["current_transcript"] += partial_transcript
+                            if not is_ok:
+                                no_signal_count += 1
+                                if no_signal_count >= 3:  # After multiple consecutive silent checks
+                                    audio_problems.append("No audio signal detected - check microphone or system audio")
+                            else:
+                                no_signal_count = 0  # Reset the counter if audio is detected
+                        except Exception as e:
+                            logger.debug(f"Could not check audio signal: {e}")
+                            # Don't add problems for this - it might be a transient issue
+                except Exception as e:
+                    logger.debug(f"Error checking audio signal: {e}")
 
-                        # Update index for next time
-                        last_processed_index = new_index
+                # Update meeting status
+                meeting["audio_problems"] = audio_problems
+                meeting["last_status_update"] = current_time.isoformat()
 
-                        # Notify all registered callbacks about the new transcript
-                        self._notify_transcript_update(meeting_id, meeting["current_transcript"], partial_transcript)
-
-                        # Clean up temporary file
-                        try:
-                            if os.path.exists(temp_audio_file):
-                                os.remove(temp_audio_file)
-                        except Exception as cleanup_error:
-                            logger.warning(f"Failed to clean up temporary file: {cleanup_error}")
-
-                    except Exception as e:
-                        logger.error(f"Error in real-time transcription: {e}")
-                        # Continue processing despite errors
-                        last_processed_index = new_index
+                # Notify all registered callbacks about the status update
+                self._notify_status_update(meeting_id, meeting)
 
                 # Sleep to avoid high CPU usage
-                time.sleep(2)
+                time.sleep(self.status_update_interval)
 
-            logger.info(f"Real-time transcription stopped for meeting {meeting_id}")
+            logger.info(f"Status updates stopped for meeting {meeting_id}")
 
         except Exception as e:
-            logger.error(f"Error in real-time transcription worker: {e}")
+            logger.error(f"Error in status update worker: {e}")
 
     def register_transcript_callback(self, meeting_id, callback):
-        """Register a callback function for transcript updates"""
-        if meeting_id not in self.live_transcription_callbacks:
-            self.live_transcription_callbacks[meeting_id] = []
+        """Register a callback function for transcript updates (deprecated)"""
+        # For backward compatibility, redirect to status callback
+        return self.register_status_callback(meeting_id, callback)
+
+    def unregister_transcript_callback(self, meeting_id, callback):
+        """Unregister a callback function (deprecated)"""
+        # For backward compatibility, redirect to status callback
+        return self.unregister_status_callback(meeting_id, callback)
+
+    def register_status_callback(self, meeting_id, callback):
+        """Register a callback function for status updates"""
+        if not hasattr(self, 'status_update_callbacks') or self.status_update_callbacks is None:
+            self.status_update_callbacks = {}
+
+        if meeting_id not in self.status_update_callbacks:
+            self.status_update_callbacks[meeting_id] = []
 
         # Make sure we have a reference to the main event loop
         if self.main_loop is None:
@@ -447,30 +505,40 @@ class TranscriberService:
             except RuntimeError:
                 logger.warning("No event loop available during callback registration")
 
-        self.live_transcription_callbacks[meeting_id].append(callback)
+        if callback not in self.status_update_callbacks[meeting_id]:
+            self.status_update_callbacks[meeting_id].append(callback)
         return True
 
-    def unregister_transcript_callback(self, meeting_id, callback):
+    def unregister_status_callback(self, meeting_id, callback):
         """Unregister a callback function"""
-        if meeting_id in self.live_transcription_callbacks:
-            if callback in self.live_transcription_callbacks[meeting_id]:
-                self.live_transcription_callbacks[meeting_id].remove(callback)
+        if not hasattr(self, 'status_update_callbacks') or self.status_update_callbacks is None:
+            return False
+
+        if meeting_id in self.status_update_callbacks:
+            if callback in self.status_update_callbacks[meeting_id]:
+                self.status_update_callbacks[meeting_id].remove(callback)
                 return True
         return False
 
-    def _notify_transcript_update(self, meeting_id, full_transcript, new_text):
-        """Notify all registered callbacks about a transcript update"""
-        if meeting_id in self.live_transcription_callbacks:
-            for callback in self.live_transcription_callbacks[meeting_id]:
+    def _notify_status_update(self, meeting_id, status_data):
+        """Notify all registered callbacks about a status update"""
+        if not hasattr(self, 'status_update_callbacks') or self.status_update_callbacks is None:
+            return
+
+        if meeting_id in self.status_update_callbacks:
+            for callback in self.status_update_callbacks[meeting_id]:
                 try:
                     if asyncio.iscoroutinefunction(callback):
                         # If we don't have a main event loop reference, we can't run async callbacks
                         if self.main_loop is None:
-                            logger.error("No event loop available for async callback - skipping")
-                            continue
+                            try:
+                                self.main_loop = asyncio.get_event_loop()
+                            except RuntimeError:
+                                logger.error("No event loop available for async callback - skipping")
+                                continue
 
                         # Create a complete coroutine object
-                        coro = callback(meeting_id, full_transcript, new_text)
+                        coro = callback(meeting_id, status_data)
 
                         # Schedule the coroutine to run in the main event loop
                         try:
@@ -479,9 +547,14 @@ class TranscriberService:
                             logger.error(f"Failed to schedule async callback: {e}")
                     else:
                         # Call regular function
-                        callback(meeting_id, full_transcript, new_text)
+                        callback(meeting_id, status_data)
                 except Exception as e:
-                    logger.error(f"Error in transcript callback: {e}")
+                    logger.error(f"Error in status update callback: {e}")
+
+    def _notify_transcript_update(self, meeting_id, full_transcript, new_text):
+        """Notify all registered callbacks about a transcript update (deprecated)"""
+        # No longer used, but kept for compatibility
+        pass
 
     def get_audio_devices(self):
         """

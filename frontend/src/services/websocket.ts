@@ -1,21 +1,22 @@
 /**
- * WebSocket service for real-time transcription updates
+ * WebSocket service for real-time recording status updates
  */
 
- type MessageCallback = (message: TranscriptMessage) => void;
+type MessageCallback = (message: StatusMessage) => void;
 type ErrorCallback = (error: Event) => void;
 type CloseCallback = (event: CloseEvent) => void;
 
-interface TranscriptMessage {
+interface StatusMessage {
   event: string;
   meeting_id: string;
-  full_transcript?: string;
-  new_text?: string;
-  transcript?: string; // For initial_transcript events
+  status?: string;
+  recording_duration?: number;
+  audio_devices?: Array<{name: string, id: string, type?: string}>;
+  audio_problems?: string[];
   timestamp: string;
 }
 
-class TranscriptWebSocketService {
+class StatusWebSocketService {
   private socket: WebSocket | null = null;
   private isConnecting = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -30,16 +31,16 @@ class TranscriptWebSocketService {
   private currentMeetingId: string | null = null;
 
   /**
-   * Connect to the WebSocket for real-time transcription
+   * Connect to the WebSocket for real-time status updates
    * @param meetingId The ID of the meeting to subscribe to
    */
   connect(meetingId: string): Promise<void> {
     // Store the meeting ID for reconnection
     this.currentMeetingId = meetingId;
-    
+
     // Reset manual disconnect flag when attempting to connect
     this.manualDisconnect = false;
-    
+
     if (this.socket?.readyState === WebSocket.OPEN) {
       return Promise.resolve();
     }
@@ -67,7 +68,7 @@ class TranscriptWebSocketService {
         `${protocol}://${window.location.hostname}:8000` :
         `${protocol}://${window.location.host}`;
 
-      const wsUrl = `${baseUrl}/api/ws/meetings/${meetingId}/transcript`;
+      const wsUrl = `${baseUrl}/api/ws/meetings/${meetingId}/status`;
 
       try {
         this.socket = new WebSocket(wsUrl);
@@ -111,12 +112,12 @@ class TranscriptWebSocketService {
           // 2. This wasn't a manual disconnect
           if (!this.manualDisconnect && this.reconnectAttempts < this.maxReconnectAttempts) {
             console.log('Scheduling reconnect attempt...');
-            
+
             // Backend restart detection: if connection was previously successful
             if (this.reconnectAttempts > 0) {
               this.backendRestarting = true;
             }
-            
+
             this.scheduleReconnect(meetingId);
           } else if (this.manualDisconnect) {
             console.log('Not reconnecting due to manual disconnect');
@@ -137,10 +138,10 @@ class TranscriptWebSocketService {
   disconnect(preventReconnect: boolean = true): void {
     console.log('Disconnecting WebSocket, preventReconnect:', preventReconnect);
     this.clearReconnectTimer();
-    
+
     // Set manual disconnect flag to prevent reconnection loops
     this.manualDisconnect = preventReconnect;
-    
+
     if (this.socket) {
       // Only prevent reconnection attempts when explicitly requested
       if (preventReconnect) {
@@ -207,12 +208,12 @@ class TranscriptWebSocketService {
       console.log('Not scheduling reconnect due to manual disconnect');
       return;
     }
-    
+
     this.clearReconnectTimer();
 
     // Use different strategies depending on whether we think the backend is restarting
     let delay: number;
-    
+
     if (this.backendRestarting) {
       // If we think the backend is restarting, use fixed delay but increase
       // it slightly each time to avoid overwhelming the server
@@ -225,7 +226,7 @@ class TranscriptWebSocketService {
 
     // Use the stored meeting ID if available
     const targetMeetingId = meetingId || this.currentMeetingId;
-    
+
     // Don't reconnect if we don't have a meeting ID
     if (!targetMeetingId) {
       console.log('No meeting ID available, cannot reconnect');
@@ -238,7 +239,7 @@ class TranscriptWebSocketService {
         console.log('Not reconnecting due to manual disconnect during delay');
         return;
       }
-      
+
       console.log(`Attempting to reconnect (${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})...`);
       this.reconnectAttempts++;
       this.connect(targetMeetingId).then(() => {
@@ -268,13 +269,13 @@ class TranscriptWebSocketService {
     this.reconnectAttempts = 0;
     this.backendRestarting = true;
     this.manualDisconnect = false; // Ensure we're not in manual disconnect state
-    
+
     // Store the meeting ID
     this.currentMeetingId = meetingId;
-    
+
     // Disconnect without preventing reconnects
     this.disconnect(false);
-    
+
     // Add a small delay to avoid connection race conditions
     return new Promise((resolve) => {
       setTimeout(() => {
@@ -288,7 +289,7 @@ class TranscriptWebSocketService {
 }
 
 // Export a singleton instance
-export const transcriptWebSocket = new TranscriptWebSocketService();
+export const statusWebSocket = new StatusWebSocketService();
 
 // Export types
-export type { TranscriptMessage };
+export type { StatusMessage };

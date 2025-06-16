@@ -1,40 +1,30 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { transcriptWebSocket, type TranscriptMessage } from '../services/websocket';
+  import { statusWebSocket, type StatusMessage } from '../services/websocket';
 
   export let meetingId: string;
-  export let initialTranscript: string = '';
   export let isRecordingActive: boolean = true;
 
-  let transcript = initialTranscript;
-  let transcriptSegments: { text: string; timestamp?: string }[] = [];
-  let transcriptElement: HTMLElement;
+  let recordingDuration = 0;
+  let audioDevices: Array<{name: string, id: string, type?: string}> = [];
+  let audioProblems: string[] = [];
   let isConnected = false;
   let connectionError = '';
-  let autoScroll = true;
   let reconnectAttempt = 0;
   let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 
-  // Format timestamp to readable time
-  function formatTimestamp(isoTimestamp: string): string {
-    try {
-      const date = new Date(isoTimestamp);
-      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    } catch {
-      return '';
-    }
+
+  // Format duration in seconds to mm:ss
+  function formatDuration(seconds: number): string {
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = Math.floor(seconds % 60);
+    return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
   }
 
-  // Initialize transcript segments if we have initial text
   onMount(() => {
-    if (initialTranscript) {
-      transcriptSegments = [{ text: initialTranscript }];
-    }
-
-    // Connect to WebSocket for live transcription
+    // Connect to WebSocket for status updates
     connectWebSocket();
 
-    // Set up auto-scrolling
     return () => {
       // Clean up
       disconnectWebSocket();
@@ -51,27 +41,27 @@
   // Connect to the WebSocket
   async function connectWebSocket() {
     try {
-      await transcriptWebSocket.connect(meetingId);
+      await statusWebSocket.connect(meetingId);
       isConnected = true;
       connectionError = '';
       reconnectAttempt = 0;
 
       // Set up message handler
-      transcriptWebSocket.onMessage((message: TranscriptMessage) => {
+      statusWebSocket.onMessage((message: StatusMessage) => {
         handleWebSocketMessage(message);
       });
 
       // Set up error handler
-      transcriptWebSocket.onError(() => {
+      statusWebSocket.onError(() => {
         isConnected = false;
         connectionError = 'Connection lost. Attempting to reconnect...';
         scheduleReconnect();
       });
 
       // Set up close handler
-      transcriptWebSocket.onClose(() => {
+      statusWebSocket.onClose(() => {
         isConnected = false;
-    
+
         // Only attempt to reconnect if recording is still active
         if (isRecordingActive) {
           connectionError = 'Connection closed. Attempting to reconnect...';
@@ -83,8 +73,8 @@
 
       // Start ping interval to keep connection alive
       const pingInterval = setInterval(() => {
-        if (transcriptWebSocket.isConnected()) {
-          transcriptWebSocket.ping();
+        if (statusWebSocket.isConnected()) {
+          statusWebSocket.ping();
         } else {
           clearInterval(pingInterval);
           // If not connected and no error already showing, schedule reconnect
@@ -97,7 +87,7 @@
       }, 30000); // Send ping every 30 seconds
     } catch (error) {
       isConnected = false;
-      connectionError = 'Failed to connect to live transcription service';
+      connectionError = 'Failed to connect to status service';
       console.error('WebSocket connection error:', error);
       scheduleReconnect();
     }
@@ -112,17 +102,17 @@
     }
 
     clearReconnectTimeout();
-    
+
     // Maximum of 10 reconnect attempts
     if (reconnectAttempt >= 10) {
       connectionError = 'Could not reconnect after multiple attempts';
       return;
     }
-    
+
     // Calculate delay with exponential backoff
     const delay = Math.min(10000, 1000 * Math.pow(1.5, reconnectAttempt));
     connectionError = `Connection lost. Reconnecting in ${Math.round(delay/1000)}s...`;
-    
+
     reconnectTimeout = setTimeout(async () => {
       // Check again if recording is still active before attempting reconnect
       if (!isRecordingActive) {
@@ -132,9 +122,9 @@
 
       connectionError = 'Attempting to reconnect...';
       reconnectAttempt++;
-      
+
       try {
-        await transcriptWebSocket.resetAndReconnect(meetingId);
+        await statusWebSocket.resetAndReconnect(meetingId);
         isConnected = true;
         connectionError = '';
         reconnectAttempt = 0;
@@ -157,74 +147,36 @@
   // Disconnect from the WebSocket
   function disconnectWebSocket() {
     clearReconnectTimeout();
-    transcriptWebSocket.disconnect(true); // true prevents auto reconnect
+    statusWebSocket.disconnect(true); // true prevents auto reconnect
     isConnected = false;
   }
 
   // Handle WebSocket messages
-  function handleWebSocketMessage(message: TranscriptMessage) {
-    if (message.event === 'transcript_update') {
-      // Update the full transcript
-      transcript = message.full_transcript || transcript;
-
-      // Add new segment
-      if (message.new_text) {
-        // Just add the new text as a single segment with its timestamp
-        // instead of splitting the full transcript (which causes duplicates)
-        transcriptSegments = [...transcriptSegments, {
-          text: message.new_text.trim(),
-          timestamp: message.timestamp
-        }];
-
-        // Auto-scroll if enabled
-        if (autoScroll && transcriptElement) {
-          setTimeout(() => {
-            transcriptElement.scrollTop = transcriptElement.scrollHeight;
-          }, 100);
-        }
+  function handleWebSocketMessage(message: StatusMessage) {
+    if (message.event === 'status_update' || message.event === 'initial_status') {
+      // Update status information
+      if (message.recording_duration !== undefined) {
+        recordingDuration = message.recording_duration;
       }
-    } else if (message.event === 'initial_transcript') {
-      // Set initial transcript
-      transcript = message.transcript || '';
-      if (transcript) {
-        // Split initial transcript into sentences if possible
-        const sentences = transcript
-          .replace(/([.!?])\s+/g, "$1|")
-          .split("|")
-          .filter(s => s.trim().length > 0);
 
-        if (sentences.length > 1) {
-          // Create unique timestamps for each sentence by adding offset
-          const baseTime = new Date(message.timestamp).getTime();
-          transcriptSegments = sentences.map((s, index) => {
-            // Add 1 second offset per sentence for visual separation
-            const adjustedTime = new Date(baseTime + (index * 1000));
-            return {
-              text: s.trim(),
-              timestamp: adjustedTime.toISOString()
-            };
-          });
-        } else {
-          transcriptSegments = [{ text: transcript, timestamp: message.timestamp }];
-        }
+      if (message.audio_devices) {
+        audioDevices = message.audio_devices;
+      }
+
+      if (message.audio_problems) {
+        audioProblems = message.audio_problems;
       }
     } else if (message.event === 'meeting_stopped') {
-      // Optionally handle meeting stopped event
-    }
-  }
-
-  // Toggle auto-scroll
-  function toggleAutoScroll() {
-    autoScroll = !autoScroll;
-    if (autoScroll && transcriptElement) {
-      transcriptElement.scrollTop = transcriptElement.scrollHeight;
+      // Handle meeting stopped event
+      isRecordingActive = false;
+      connectionError = 'Recording stopped';
     }
   }
 </script>
 
 <div class="flex flex-col h-full border border-gray-200 rounded-md bg-white">
   <div class="flex justify-between items-center p-3 border-b border-gray-200">
-    <h3 class="text-lg font-semibold">Live Transcription</h3>
+    <h3 class="text-lg font-semibold">Recording Status</h3>
     <div class="flex items-center">
       {#if isConnected}
         <span class="flex items-center text-xs py-1 px-2 rounded-full text-emerald-700 bg-emerald-100">
@@ -242,7 +194,7 @@
             on:click={() => {
               if (isRecordingActive) {
                 connectionError = 'Reconnecting...';
-                transcriptWebSocket.resetAndReconnect(meetingId);
+                statusWebSocket.resetAndReconnect(meetingId);
               } else {
                 connectionError = 'Cannot reconnect: recording stopped';
               }
@@ -252,45 +204,59 @@
           </button>
         {/if}
       {/if}
-
-      <button
-        class={`ml-3 text-xs py-1 px-2 rounded bg-gray-100 hover:bg-gray-200 ${autoScroll ? 'bg-blue-50 text-blue-700' : ''}`}
-        on:click={toggleAutoScroll}
-      >
-        Auto-scroll {autoScroll ? 'ON' : 'OFF'}
-      </button>
     </div>
   </div>
 
   <div
     class="flex-1 p-4 overflow-y-auto bg-gray-50 rounded-b-md"
-    bind:this={transcriptElement}
   >
-    {#if transcriptSegments.length === 0}
+    {#if !isConnected}
       <div class="flex justify-center items-center h-full text-gray-500 italic">
-        {#if isConnected}
-          <p>Waiting for speech...</p>
-        {:else}
-          <p>Connect to see live transcription</p>
-        {/if}
+        <p>Connect to see recording status</p>
       </div>
     {:else}
-      <div class="space-y-3">
-        {#each transcriptSegments as segment, i (`segment_${i}`)}
-          <div class="transcript-segment">
-            {#if segment.timestamp}
-              <div class="text-xs text-gray-500 mb-1">
-                {formatTimestamp(segment.timestamp)}
-              </div>
-            {/if}
-            <div class={`whitespace-pre-line leading-relaxed ${i === transcriptSegments.length - 1 ? 'text-indigo-700 font-medium' : ''}`}>
-              {segment.text}
-            </div>
+      <div class="space-y-4">
+        <!-- Recording Duration -->
+        <div class="bg-white p-3 rounded-lg shadow-sm border border-gray-200">
+          <h4 class="text-sm font-medium text-gray-700 mb-2">Recording Duration</h4>
+          <div class="text-2xl font-semibold text-indigo-700">{formatDuration(recordingDuration)}</div>
+        </div>
+
+        <!-- Audio Devices -->
+        <div class="bg-white p-3 rounded-lg shadow-sm border border-gray-200">
+          <h4 class="text-sm font-medium text-gray-700 mb-2">Audio Devices</h4>
+          {#if audioDevices.length === 0}
+            <p class="text-sm text-gray-500">No audio devices detected</p>
+          {:else}
+            <ul class="space-y-1">
+              {#each audioDevices as device (device.id)}
+                              <li class="flex items-center text-sm">
+                                <span class="w-2 h-2 bg-emerald-600 rounded-full mr-2"></span>
+                                <span>{device.name}</span>
+                                {#if device.type}
+                                  <span class="ml-1 text-xs text-gray-500">({device.type})</span>
+                                {/if}
+                              </li>
+                            {/each}
+            </ul>
+          {/if}
+        </div>
+
+        <!-- Audio Problems -->
+        {#if audioProblems.length > 0}
+          <div class="bg-red-50 p-3 rounded-lg shadow-sm border border-red-200">
+            <h4 class="text-sm font-medium text-red-700 mb-2">Problems Detected</h4>
+            <ul class="space-y-1">
+              {#each audioProblems as problem (problem)}
+                              <li class="flex items-center text-sm text-red-700">
+                                <span class="w-2 h-2 bg-red-600 rounded-full mr-2"></span>
+                                <span>{problem}</span>
+                              </li>
+                            {/each}
+            </ul>
           </div>
-        {/each}
+        {/if}
       </div>
     {/if}
   </div>
 </div>
-
-<!-- No custom CSS needed as we're using Tailwind classes -->

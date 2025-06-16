@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
 
@@ -7,6 +7,8 @@ class MeetingStatus(str, Enum):
     IDLE = "idle"
     RECORDING = "recording"
     PROCESSING = "processing"
+    TRANSCRIBING = "transcribing"
+    SUMMARIZING = "summarizing"
     COMPLETED = "completed"
     ERROR = "error"
 
@@ -25,7 +27,10 @@ class MeetingResponse(BaseModel):
     transcript_path: Optional[str] = None
     summary_path: Optional[str] = None
     summary_content: Optional[str] = None
-    current_transcript: Optional[str] = None
+    recording_duration: Optional[float] = None
+    audio_devices: List[Dict[str, Any]] = Field(default_factory=list)
+    audio_problems: List[str] = Field(default_factory=list)
+    last_status_update: Optional[datetime] = None
 
 class MeetingStatusResponse(BaseModel):
     status: MeetingStatus
