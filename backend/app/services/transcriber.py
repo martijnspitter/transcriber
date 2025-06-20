@@ -396,39 +396,42 @@ class TranscriberService:
 
                 # Get audio devices information
                 try:
-                    # Only add the specific device being used for this meeting
+                    # Get the actual devices being used for this recording from the audio service
                     formatted_devices = []
 
-                    # Add the microphone device being used (if available)
-                    device_id = meeting.get("device_id")
-                    if device_id is not None:
-                        # Try to get the actual device name from the audio service
-                        device_name = "Microphone"
-                        if hasattr(self.audio_service, "get_device_name"):
-                            try:
-                                device_name = self.audio_service.get_device_name(device_id) or "Microphone"
-                            except:
-                                pass
+                    # Check if the audio service has active recordings for this meeting
+                    if hasattr(self.audio_service, 'active_recordings') and meeting_id in self.audio_service.active_recordings:
+                        # Get the recording data
+                        recording = self.audio_service.active_recordings[meeting_id]
 
-                        formatted_devices.append({
-                            "id": str(device_id),
-                            "name": device_name,
-                            "type": "microphone"
-                        })
+                        # Add microphone device if it's being used
+                        if 'input_device' in recording and recording['input_device'] is not None:
+                            device_id = recording['input_device']
+                            device_name = "Microphone"
 
-                    # Add system audio if it's being used for this meeting
-                    if meeting.get("using_system_audio") and self.system_audio_available:
-                        formatted_devices.append({
-                            "id": "system_audio",
-                            "name": "System Audio",
-                            "type": "system"
-                        })
+                            # Try to find the device name from available devices
+                            if hasattr(self.audio_service, 'available_devices'):
+                                for device in self.audio_service.available_devices.get("input", []):
+                                    if str(device.get("id")) == str(device_id):
+                                        device_name = device.get("name", "Microphone")
+                                        break
+
+                            formatted_devices.append({
+                                "id": str(device_id),
+                                "name": device_name,
+                                "type": "microphone"
+                            })
+
+                        # Add system audio if it's being used
+                        if recording.get('system_audio_enabled', False):
+                            formatted_devices.append({
+                                "id": "system_audio",
+                                "name": "System Audio",
+                                "type": "system"
+                            })
 
                     meeting["audio_devices"] = formatted_devices
-
-                    # Check if no devices are connected
-                    devices = self.get_audio_devices()
-                    if not devices:
+                    if not formatted_devices:
                         audio_problems.append("No audio input devices detected")
                 except Exception as e:
                     logger.error(f"Error getting audio devices: {e}")
