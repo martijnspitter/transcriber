@@ -16,14 +16,14 @@ type CombinedAudio struct {
 	outputPath  string
 }
 
-func NewCombinedAudio(duration int, outputPath string) *CombinedAudio {
+func NewCombinedAudio(outputPath string) *CombinedAudio {
 	inputOptions := InputOptions{
 		OutputPath: "input.wav",
-		Duration:   duration,
+		Duration:   0,
 	}
 	outputOptions := OutputAudioOptions{
 		OutputPath: "output.wav",
-		Duration:   duration,
+		Duration:   0,
 	}
 
 	InputAudio := NewInputAudio(inputOptions)
@@ -32,10 +32,35 @@ func NewCombinedAudio(duration int, outputPath string) *CombinedAudio {
 	return &CombinedAudio{
 		inputAudio:  InputAudio,
 		outputAudio: OutputAudio,
-		duration:    duration,
+		duration:    0,
 		stopChan:    make(chan struct{}),
 		outputPath:  outputPath,
 	}
+}
+
+// ListAudioDevices lists available audio devices
+func ListAudioDevices() ([]string, error) {
+	cmd := exec.Command("ffmpeg", "-f", "avfoundation", "-list_devices", "true", "-i", "dummy")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list audio devices: %w", err)
+	}
+	lines := strings.Split(string(output), "\n")
+	var devices []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[AVFoundation]") && strings.Contains(line, "audio") {
+			// Extract device name from the line
+			// Assuming the format is like "[AVFoundation input device 'Built-in Microphone']"
+			start := strings.Index(line, "'")
+			end := strings.LastIndex(line, "'")
+			if start != -1 && end != -1 && start < end {
+				deviceName := line[start+1 : end]
+				devices = append(devices, deviceName)
+			}
+		}
+	}
+	return devices, nil
 }
 
 // Start begins the combined audio capture process

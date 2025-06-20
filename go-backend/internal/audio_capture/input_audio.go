@@ -45,15 +45,6 @@ func (ac *InputAudio) Start() error {
 		return fmt.Errorf("recording already in progress")
 	}
 
-	// List devices for debugging before starting
-	devices, _ := ListAudioDevices()
-	if len(devices) > 0 {
-		fmt.Println("Available audio devices before recording:")
-		for _, device := range devices {
-			fmt.Println(device)
-		}
-	}
-
 	var args []string
 
 	// Construct ffmpeg command - always use microphone which will pick up system audio too
