@@ -2,22 +2,33 @@
  * API service for communicating with the Meeting Transcriber backend
  */
 
-// Use relative path for SvelteKit API routes
-const API_BASE_URL = '/api';
+// Backend API URL
+const API_BASE_URL = '';
 
 // Types
 export interface Meeting {
   id: string;
   title: string;
-  status: 'idle' | 'recording' | 'processing' | 'completed' | 'error';
+  status: 'recording' | 'processing' | 'completed' | 'failed';
+  created_at: string;
   start_time: string;
-  end_time?: string;
-  duration_seconds?: number;
+  duration: number;
   participants: string[];
-  transcript_path?: string;
-  summary_path?: string;
-  summary_content?: string;
-  current_transcript?: string;
+  transcript_path: string;
+  audio_devices: AudioDevice[];
+  transcript?: string;
+  summary?: string;
+  error?: string;
+}
+
+export interface AudioDevice {
+  id: number;
+  name: string;
+  channels: number;
+  is_input: boolean;
+  is_output: boolean;
+  is_system: boolean;
+  is_default: boolean;
 }
 
 export interface CreateMeetingRequest {
@@ -25,17 +36,34 @@ export interface CreateMeetingRequest {
   participants: string[];
 }
 
+export interface StartMeetingResponse {
+  meeting_id: string;
+}
+
 export interface MeetingStatusResponse {
-  status: 'idle' | 'recording' | 'processing' | 'completed' | 'error';
+  status: 'recording' | 'processing' | 'completed' | 'failed';
   message?: string;
+}
+
+export interface StopMeetingRequest {
+  meeting_id: string;
+}
+
+export interface StopMeetingResponse {
+  message: string;
+}
+
+export interface MeetingsResponse {
+  status: string;
+  meetings: Meeting[];
 }
 
 /**
  * Start a new meeting recording
  */
-export async function startMeeting(data: CreateMeetingRequest): Promise<Meeting> {
+export async function startMeeting(data: CreateMeetingRequest): Promise<StartMeetingResponse> {
   try {
-    const response = await fetch(`${API_BASE_URL}/meetings/`, {
+    const response = await fetch(`${API_BASE_URL}/start-recording`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -45,7 +73,7 @@ export async function startMeeting(data: CreateMeetingRequest): Promise<Meeting>
 
     if (!response.ok) {
       const errorData = await response.json();
-      throw new Error(errorData.detail || 'Failed to start meeting');
+      throw new Error(errorData.error || 'Failed to start meeting');
     }
 
     return await response.json();
@@ -58,18 +86,23 @@ export async function startMeeting(data: CreateMeetingRequest): Promise<Meeting>
 /**
  * Stop a meeting recording and start processing
  */
-export async function stopMeeting(meetingId: string): Promise<MeetingStatusResponse> {
+export async function stopMeeting(meetingId: string): Promise<StopMeetingResponse> {
   try {
-    const response = await fetch(`${API_BASE_URL}/meetings/${meetingId}/stop`, {
+    const response = await fetch(`${API_BASE_URL}/stop-recording`, {
       method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ meeting_id: meetingId }),
     });
 
     if (!response.ok) {
       const errorData = await response.json();
-      throw new Error(errorData.detail || 'Failed to stop meeting');
+      throw new Error(errorData.error || 'Failed to stop meeting');
     }
 
-    return await response.json();
+    const responseData = await response.json();
+    return responseData;
   } catch (error) {
     console.error('API error in stopMeeting:', error);
     throw error;
@@ -81,11 +114,11 @@ export async function stopMeeting(meetingId: string): Promise<MeetingStatusRespo
  */
 export async function getMeeting(meetingId: string): Promise<Meeting> {
   try {
-    const response = await fetch(`${API_BASE_URL}/meetings/${meetingId}`);
+    const response = await fetch(`${API_BASE_URL}/meeting-status?id=${meetingId}`);
 
     if (!response.ok) {
       const errorData = await response.json();
-      throw new Error(errorData.detail || 'Failed to get meeting details');
+      throw new Error(errorData.error || 'Failed to get meeting details');
     }
 
     return await response.json();
@@ -100,14 +133,15 @@ export async function getMeeting(meetingId: string): Promise<Meeting> {
  */
 export async function getAllMeetings(): Promise<Meeting[]> {
   try {
-    const response = await fetch(`${API_BASE_URL}/meetings/`);
+    const response = await fetch(`${API_BASE_URL}/meetings`);
 
     if (!response.ok) {
       const errorData = await response.json();
-      throw new Error(errorData.detail || 'Failed to get meetings');
+      throw new Error(errorData.error || 'Failed to get meetings');
     }
 
-    return await response.json();
+    const data: MeetingsResponse = await response.json();
+    return data.meetings;
   } catch (error) {
     console.error('API error in getAllMeetings:', error);
     throw error;
@@ -122,23 +156,23 @@ export async function getAllMeetings(): Promise<Meeting[]> {
  * @returns The completed meeting data
  */
 export async function pollMeetingUntilComplete(
-  meetingId: string, 
-  intervalMs = 2000, 
+  meetingId: string,
+  intervalMs = 2000,
   maxAttempts = 30
 ): Promise<Meeting> {
   let attempts = 0;
-  
+
   while (attempts < maxAttempts) {
     const meeting = await getMeeting(meetingId);
-    
-    if (meeting.status === 'completed' || meeting.status === 'error') {
+
+    if (meeting.status === 'completed' || meeting.status === 'failed') {
       return meeting;
     }
-    
+
     // Wait for the specified interval
     await new Promise(resolve => setTimeout(resolve, intervalMs));
     attempts++;
   }
-  
+
   throw new Error('Polling timed out: meeting processing is taking too long');
 }

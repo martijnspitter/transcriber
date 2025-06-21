@@ -88,7 +88,7 @@ func (s *Server) handleStartRecording() http.HandlerFunc {
 		}
 
 		var requestBody struct {
-			Title        string   `json:"title"` // in seconds
+			Title        string   `json:"title"`
 			Participants []string `json:"participants,omitempty"`
 		}
 

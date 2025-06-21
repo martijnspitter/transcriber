@@ -2,12 +2,11 @@
 import {
   startMeeting,
   stopMeeting,
-  pollMeetingUntilComplete,
+  getMeeting,
   type Meeting
 } from "../services/api";
 import RecordingStatus from '../components/RecordingStatus.svelte';
 import {  onDestroy } from 'svelte';
-import { statusWebSocket } from '../services/websocket';
 
 let isRecording = false;
 let meetingTitle = "New Meeting";
@@ -19,6 +18,8 @@ let timer: number | null = null;
 let isProcessing = false;
 let errorMessage = "";
 let meeting: Meeting | null = null;
+let pollingInterval: number | null = null;
+let pollingTimeout = 2000; // Poll every 2 seconds
 
 // Function to start recording
 async function startRecording() {
@@ -38,8 +39,11 @@ async function startRecording() {
       participants: participants
     });
 
-    currentMeetingId = response.id;
+    currentMeetingId = response.meeting_id;
     console.log("Started recording, meeting ID:", currentMeetingId);
+
+    // Start the polling cycle
+    startPolling();
   } catch (error) {
     console.error("Failed to start recording:", error);
     errorMessage = error instanceof Error ? error.message : "Failed to start recording";
@@ -65,42 +69,73 @@ async function stopRecording() {
       timer = null;
     }
 
-    // Ensure WebSocket connections are properly closed
-    try {
-      statusWebSocket.disconnect(true);
-    } catch (e) {
-      console.warn("Error disconnecting WebSocket:", e);
-    }
-
     // Call the backend API to stop meeting
     await stopMeeting(currentMeetingId);
     transcriptText = "Processing your meeting recording...";
 
-    // Ensure WebSocket connections are properly closed when recording stops
-    statusWebSocket.disconnect(true);
-
-    // Poll for meeting status until complete
-    try {
-      meeting = await pollMeetingUntilComplete(currentMeetingId);
-      if (meeting.status === 'completed') {
-        if (meeting.summary_content) {
-          transcriptText = "Transcription and summarization complete!";
-        } else {
-          transcriptText = "Transcription complete! Files saved to your Documents folder.";
-        }
-      } else {
-        transcriptText = "There was an error processing your meeting.";
-      }
-    } catch (pollError) {
-      console.error("Error polling meeting status:", pollError);
-      transcriptText = "Transcription is taking longer than expected. Please check status later.";
-    }
-
-    isProcessing = false;
+    // Continue polling - no need to stop it as we want to see the status updates
+    // while the meeting is being processed
   } catch (error) {
     console.error("Failed to stop recording:", error);
     errorMessage = error instanceof Error ? error.message : "Failed to stop recording";
     isProcessing = false;
+  }
+}
+
+// Centralized polling function for meeting status
+function startPolling() {
+  // Clear any existing polling
+  stopPolling();
+
+  // Set up a new polling interval
+  pollingInterval = window.setInterval(async () => {
+    if (!currentMeetingId) {
+      stopPolling();
+      return;
+    }
+
+    try {
+      // Get the latest meeting status
+      const updatedMeeting = await getMeeting(currentMeetingId);
+      meeting = updatedMeeting;
+
+      // Handle status changes
+      if (meeting.status === 'failed') {
+        transcriptText = meeting.error || "There was an error processing your meeting.";
+        isProcessing = false;
+      } else if (meeting.status === 'completed') {
+        if (meeting.summary) {
+          transcriptText = "Transcription and summarization complete!";
+        } else {
+          transcriptText = "Transcription complete! Files saved to your Documents folder.";
+        }
+        isProcessing = false;
+
+        // Slow down polling once completed
+        if (pollingTimeout !== 5000) {
+          pollingTimeout = 5000;
+          stopPolling();
+          startPolling();
+        }
+      }
+
+      // Update recording state if needed
+      if (isRecording && meeting.status !== 'recording') {
+        isRecording = false;
+        isProcessing = true;
+      }
+    } catch (error) {
+      console.error("Error polling meeting status:", error);
+      // Don't stop polling on errors, just log them
+    }
+  }, pollingTimeout);
+}
+
+// Stop polling function
+function stopPolling() {
+  if (pollingInterval !== null) {
+    clearInterval(pollingInterval);
+    pollingInterval = null;
   }
 }
 
@@ -130,8 +165,7 @@ onDestroy(() => {
     timer = null;
   }
 
-  // Ensure all WebSocket connections are properly closed
-  statusWebSocket.disconnect(true);
+  stopPolling();
 
   // If recording is active when component is destroyed, try to stop it
   if (isRecording && currentMeetingId) {
@@ -213,11 +247,11 @@ onDestroy(() => {
         </div>
       {/if}
 
-      {#if isRecording && currentMeetingId}
+      {#if isRecording && currentMeetingId && meeting}
         <!-- Recording status during recording -->
         <div class="mb-4 border rounded-lg overflow-hidden h-fit">
           <RecordingStatus
-            meetingId={currentMeetingId}
+            meeting={meeting}
             isRecordingActive={isRecording}
           />
         </div>
@@ -228,12 +262,12 @@ onDestroy(() => {
           </div>
           <p>Processing your meeting recording...</p>
         </div>
-      {:else if meeting && meeting.status === 'completed' && meeting.summary_content}
+      {:else if meeting && meeting.status === 'completed' && meeting.summary}
         <!-- Display the summary -->
         <div class="mb-6">
           <h3 class="text-lg font-semibold text-gray-800 mb-2">Meeting Summary</h3>
           <div class="bg-gray-50 p-4 rounded border prose prose-sm max-w-none">
-            <div class="whitespace-pre-line">{meeting.summary_content}</div>
+            <div class="whitespace-pre-line">{meeting.summary}</div>
           </div>
 
           <div class="text-sm text-gray-500 mt-2">
@@ -250,12 +284,19 @@ onDestroy(() => {
         </div>
       {/if}
 
-      {#if meeting && meeting.status === 'completed'}
+      {#if meeting && (meeting.status === 'completed' || meeting.status === 'failed')}
         <div class="mt-4 flex items-center text-sm text-gray-500">
-          <svg class="w-4 h-4 mr-1 text-green-500" fill="currentColor" viewBox="0 0 20 20">
-            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
-          </svg>
-          <span>Files saved at: ~/Documents/Meeting_Transcripts/</span>
+          {#if meeting.status === 'completed'}
+            <svg class="w-4 h-4 mr-1 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+              <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+            </svg>
+            <span>Files saved at: ~/Documents/Meeting_Transcripts/</span>
+          {:else}
+            <svg class="w-4 h-4 mr-1 text-red-500" fill="currentColor" viewBox="0 0 20 20">
+              <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm-1-5a1 1 0 011-1h.01a1 1 0 110 2H10a1 1 0 01-1-1zm1-9a1 1 0 00-1 1v4a1 1 0 102 0V5a1 1 0 00-1-1z" clip-rule="evenodd" />
+            </svg>
+            <span>Error: {meeting.error || "Unknown error occurred"}</span>
+          {/if}
         </div>
       {/if}
     </div>
