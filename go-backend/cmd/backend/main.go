@@ -13,7 +13,7 @@ func main() {
 	logger := logger.NewLogger()
 	logger.Info("Starting Transcriber API server...")
 
-	transcriber := transcriber.NewTranscriber(logger)
+	transcriber := transcriber.NewTranscriberService(logger)
 
 	// Create a new API server
 	server := api.NewServer(logger, transcriber)

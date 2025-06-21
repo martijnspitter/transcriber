@@ -1,26 +1,28 @@
 package transcriber
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
-	"time"
 
 	"github.com/martijnspitter/transcriber/internal/logger"
+	osoperations "github.com/martijnspitter/transcriber/internal/os_operations"
 	"github.com/martijnspitter/transcriber/internal/types"
 )
 
-type Summary struct {
+type Transcriber struct {
 	audioFilePath string
 	summary       string
 	logger        *logger.Logger
 	meeting       *types.Meeting
 }
 
-func NewSummary(audioFilePath string, logger *logger.Logger, meeting *types.Meeting) *Summary {
-	return &Summary{
+func NewTranscriber(audioFilePath string, logger *logger.Logger, meeting *types.Meeting) *Transcriber {
+	return &Transcriber{
 		audioFilePath: audioFilePath,
 		summary:       "",
 		logger:        logger,
@@ -28,45 +30,84 @@ func NewSummary(audioFilePath string, logger *logger.Logger, meeting *types.Meet
 	}
 }
 
-func (s *Summary) TranscribeAudio() (string, error) {
-	// Load audio data
-	s.logger.Info("Loading audio file for transcription")
-
+func (s *Transcriber) TranscribeAudio() (string, error) {
 	// Check if meeting data is available
 	if s.meeting == nil {
 		return "", fmt.Errorf("meeting data not provided")
 	}
-	// Create a temporary output file for the transcription
-	tempDir := os.TempDir()
-	outputFile := filepath.Join(tempDir, "transcription.txt")
+	s.logger.Info("Starting transcription using OpenAI Whisper")
+
+	// Get just the filename without extension for output file naming
+	audioFileNameWithoutExt := osoperations.GetFileNameWithoutExtension(s.audioFilePath)
+
+	// Create a temporary output directory
+	tempDir, err := osoperations.CreateTempDirectory("whisper_output")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer osoperations.RemoveTempDirectory(tempDir) // Clean up temp dir when done
 
 	// Prepare the whisper command
-	// Adjust model size as needed: tiny, base, small, medium, large
-	modelSize := "base"
+	// Adjust model size as needed: tiny, base, small, medium, large, turbo
+	modelSize := "medium"
 	cmd := exec.Command("whisper",
 		s.audioFilePath,
 		"--model", modelSize,
 		"--language", "en",
-		"--output_dir", tempDir)
+		"--output_dir", tempDir,
+		"--output_format", "srt", // Use SRT format to get timestamps
+		"--verbose", "False")
 
 	// Run the whisper command
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		s.logger.Error("Whisper transcription failed", err)
 		s.logger.Error("Command output", string(output))
-		return "", fmt.Errorf("whisper transcription failed: %w", err)
+
+		// List the directory contents for debugging
+		files, _ := os.ReadDir(tempDir)
+		fileList := "Files in output directory: "
+		for _, file := range files {
+			fileList += file.Name() + ", "
+		}
+		s.logger.Info(fileList)
+
+		return "", fmt.Errorf("whisper transcription failed: %w\nOutput: %s", err, string(output))
 	}
 
-	// Read the transcription output
-	transcriptionText, err := os.ReadFile(outputFile)
+	// Whisper will save the txt file with the same base name as the input file
+	expectedOutputFile := filepath.Join(tempDir, audioFileNameWithoutExt+".srt")
+
+	// Check if the expected file exists
+	if _, err := os.Stat(expectedOutputFile); os.IsNotExist(err) {
+		// Try to find any .txt file in the directory if the expected one doesn't exist
+		files, _ := os.ReadDir(tempDir)
+		found := false
+		for _, file := range files {
+			if strings.HasSuffix(file.Name(), ".srt") {
+				expectedOutputFile = filepath.Join(tempDir, file.Name())
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			s.logger.Error("No transcription file found", nil)
+			fileList := "Files in output directory: "
+			files, _ := os.ReadDir(tempDir)
+			for _, file := range files {
+				fileList += file.Name() + ", "
+			}
+			s.logger.Info(fileList)
+			return "", fmt.Errorf("no transcription file found in output directory")
+		}
+	}
+
+	// Parse the SRT file to extract segments with timestamps
+	segments, err := parseSRTFile(expectedOutputFile)
 	if err != nil {
-		return "", fmt.Errorf("failed to read transcription output: %w", err)
+		return "", fmt.Errorf("failed to parse SRT file: %w", err)
 	}
-
-	// Parse the transcription to extract segments with timestamps
-	// Note: Whisper's output format might vary, so this parsing logic
-	// might need adjustment based on the actual output format
-	segments := parseWhisperOutput(string(transcriptionText))
 
 	// Create markdown header with meeting info
 	header := fmt.Sprintf("# %s\n\n", s.meeting.Title)
@@ -86,37 +127,91 @@ func (s *Summary) TranscribeAudio() (string, error) {
 	// Generate transcript with the formatted segments
 	var transcript strings.Builder
 	transcript.WriteString(header)
-	transcript.WriteString(string(transcriptionText))
 
 	// Add timestamps to each segment
 	for _, segment := range segments {
-		// timestamp := formatTimestamp(segment.Start)
-		transcript.WriteString(fmt.Sprintf("%s\n\n", segment))
+		transcript.WriteString(fmt.Sprintf("[%s --> %s] %s\n", segment.startTime, segment.endTime, segment.text))
 	}
 
 	s.summary = transcript.String()
-
-	// Generate output filename based on meeting title and date
-	baseFileName := strings.ReplaceAll(s.meeting.Title, " ", "_")
-	timestamp := s.meeting.CreatedAt.Format("20060102_150405")
-	transcriptFileName := fmt.Sprintf("%s_%s_transcript.md", baseFileName, timestamp)
-	transcriptFilePath := filepath.Join("./", transcriptFileName)
-
-	// Write transcript to file
-	if err := os.WriteFile(transcriptFilePath, []byte(s.summary), 0644); err != nil {
-		return "", fmt.Errorf("failed to write transcript to file: %w", err)
-	}
 
 	s.logger.Info("Transcription completed")
 	return s.summary, nil
 }
 
-// formatTimestamp converts seconds to MM:SS format
-func formatTimestamp(timestamp time.Duration) string {
-	return timestamp.String()
+type Segment struct {
+	startTime string
+	endTime   string
+	text      string
 }
 
-func parseWhisperOutput(text string) []string {
-	// Split the text into segments (this is simplified)
-	return strings.Split(text, "\n\n")
+func parseSRTFile(filePath string) ([]Segment, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var segments []Segment
+	scanner := bufio.NewScanner(file)
+
+	var currentSegment Segment
+	var isReadingText bool
+	var textLines []string
+
+	// Regular expression to match SRT timestamp line (e.g., "00:00:00,000 --> 00:00:05,000")
+	timestampRegex := regexp.MustCompile(`(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})`)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Check if this is a timestamp line
+		matches := timestampRegex.FindStringSubmatch(line)
+		if len(matches) > 0 {
+			// Found timestamp line, start a new segment
+			isReadingText = true
+			currentSegment = Segment{
+				startTime: matches[1],
+				endTime:   matches[2],
+			}
+			textLines = []string{}
+			continue
+		}
+
+		// If line is empty and we were reading text, end of segment
+		if line == "" && isReadingText && len(textLines) > 0 {
+			currentSegment.text = strings.Join(textLines, " ")
+			segments = append(segments, currentSegment)
+			isReadingText = false
+			continue
+		}
+
+		// If we're in text mode and line isn't a number (segment number), add to text
+		if isReadingText && !isNumeric(line) {
+			textLines = append(textLines, line)
+		}
+	}
+
+	// Check for any error that occurred during scanning
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	// Add the last segment if there's text
+	if isReadingText && len(textLines) > 0 {
+		currentSegment.text = strings.Join(textLines, " ")
+		segments = append(segments, currentSegment)
+	}
+
+	return segments, nil
+}
+
+// isNumeric checks if a string is a numeric value
+func isNumeric(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
 }

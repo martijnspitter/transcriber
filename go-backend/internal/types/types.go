@@ -19,6 +19,8 @@ type Meeting struct {
 	Transcript_path string        `json:"transcript_path"`
 	Duration        int           `json:"duration"` // in seconds
 	Audio_devices   []AudioDevice `json:"audio_devices"`
+	Transcript      string        `json:"transcript,omitempty"` // Optional, can be empty if not transcribed
+	Summary         string        `json:"summary,omitempty"`    // Optional, can be empty if not summarized
 }
 
 type AudioDevice struct {

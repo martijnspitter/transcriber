@@ -21,11 +21,11 @@ type Server struct {
 	router      *http.ServeMux
 	server      *http.Server
 	logger      *logger.Logger
-	transcriber *transcriber.Transcriber
+	transcriber *transcriber.TranscriberService
 }
 
 // NewServer creates a new API server instance
-func NewServer(logger *logger.Logger, transcriber *transcriber.Transcriber) *Server {
+func NewServer(logger *logger.Logger, transcriber *transcriber.TranscriberService) *Server {
 	s := &Server{
 		router:      http.NewServeMux(),
 		logger:      logger,
