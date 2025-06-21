@@ -47,6 +47,10 @@ func (s *Server) registerRoutes() {
 	s.router.HandleFunc("/start-recording", s.handleStartRecording())
 	s.router.HandleFunc("/stop-recording", s.handleStopRecording())
 
+	// Meeting status endpoints
+	s.router.HandleFunc("/meeting-status", s.handleGetMeetingStatus())
+	s.router.HandleFunc("/meetings", s.handleGetAllMeetings())
+
 	s.router.HandleFunc("/list-audio-devices", s.handleListAudioDevices())
 
 	// Root endpoint
@@ -133,16 +137,73 @@ func (s *Server) handleStopRecording() http.HandlerFunc {
 			return
 		}
 
-		s.transcriber.StopMeeting(requestBody.MeetingId)
+		err := s.transcriber.StopMeeting(requestBody.MeetingId)
+		if err != nil {
+			s.logger.Error("Failed to stop meeting", "error", err, "meetingId", requestBody.MeetingId)
+			s.respondWithJSON(w, http.StatusInternalServerError, map[string]string{
+				"error": fmt.Sprintf("Failed to stop meeting: %v", err),
+			})
+			return
+		}
 
-		// In a real implementation, we would stop the recording process here
-		// For now, we'll just return a mock response
-		response := map[string]string{"status": "recording stopped"}
-		s.respondWithJSON(w, http.StatusOK, response)
+		s.respondWithJSON(w, http.StatusAccepted, map[string]interface{}{
+			"message": "Meeting processing started",
+		})
 	}
 }
 
 // handleCaptureAndMergeAudio returns a handler for capturing and merging audio in one operation
+// handleGetMeetingStatus returns a handler for getting meeting status by ID
+func (s *Server) handleGetMeetingStatus() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Only allow GET method
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Get meeting ID from query parameter
+		meetingId := r.URL.Query().Get("id")
+		if meetingId == "" {
+			s.respondWithJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "Missing meeting ID parameter",
+			})
+			return
+		}
+
+		// Get meeting status
+		meeting, err := s.transcriber.GetMeetingStatus(meetingId)
+		if err != nil {
+			s.logger.Error("Failed to get meeting status", "error", err, "meetingId", meetingId)
+			s.respondWithJSON(w, http.StatusNotFound, map[string]string{
+				"error": fmt.Sprintf("Failed to get meeting status: %v", err),
+			})
+			return
+		}
+
+		s.respondWithJSON(w, http.StatusOK, meeting)
+	}
+}
+
+// handleGetAllMeetings returns a handler for getting all meetings
+func (s *Server) handleGetAllMeetings() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Only allow GET method
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Get all meetings
+		meetings := s.transcriber.GetAllMeetings()
+
+		s.respondWithJSON(w, http.StatusOK, map[string]interface{}{
+			"status":   "success",
+			"meetings": meetings,
+		})
+	}
+}
+
 // handleListAudioDevices returns a handler that lists available audio devices
 func (s *Server) handleListAudioDevices() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -186,7 +247,7 @@ func (s *Server) respondWithJSON(w http.ResponseWriter, status int, payload inte
 
 // Start initializes the server and starts listening for requests
 func (s *Server) Start() error {
-	addr := ":8080"
+	addr := ":8000"
 
 	// Create the HTTP server
 	s.server = &http.Server{

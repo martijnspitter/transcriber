@@ -5,8 +5,10 @@ import "time"
 type MeetingStatus string
 
 const (
-	MeetingStatusRecording MeetingStatus = "recording"
-	MeetingStatusCompleted MeetingStatus = "completed"
+	MeetingStatusRecording  MeetingStatus = "recording"
+	MeetingStatusProcessing MeetingStatus = "processing"
+	MeetingStatusCompleted  MeetingStatus = "completed"
+	MeetingStatusFailed     MeetingStatus = "failed"
 )
 
 type Meeting struct {
@@ -21,6 +23,7 @@ type Meeting struct {
 	Audio_devices   []AudioDevice `json:"audio_devices"`
 	Transcript      string        `json:"transcript,omitempty"` // Optional, can be empty if not transcribed
 	Summary         string        `json:"summary,omitempty"`    // Optional, can be empty if not summarized
+	Error           string        `json:"error,omitempty"`      // Error message if processing failed
 }
 
 type AudioDevice struct {

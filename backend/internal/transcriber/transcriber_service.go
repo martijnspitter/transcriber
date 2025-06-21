@@ -16,11 +16,13 @@ type TranscriberService struct {
 	meeting  *types.Meeting
 	logger   *logger.Logger
 	recorder *audiocapture.CombinedAudio
+	meetings map[string]*types.Meeting
 }
 
 func NewTranscriberService(logger *logger.Logger) *TranscriberService {
 	return &TranscriberService{
-		logger: logger,
+		logger:   logger,
+		meetings: make(map[string]*types.Meeting),
 	}
 }
 
@@ -29,8 +31,9 @@ func (t *TranscriberService) StartRecording(title string, participants []string)
 		title = "New Meeting"
 	}
 	timestamp := time.Now()
+	meetingID := uuid.NewString()
 	t.meeting = &types.Meeting{
-		Id:            uuid.NewString(),
+		Id:            meetingID,
 		Title:         title,
 		CreatedAt:     timestamp,
 		Start_time:    timestamp,
@@ -38,6 +41,9 @@ func (t *TranscriberService) StartRecording(title string, participants []string)
 		Participants:  participants,
 		Audio_devices: []types.AudioDevice{}, // Initialize with empty slice instead of nil
 	}
+
+	// Store the meeting in the map for later retrieval
+	t.meetings[meetingID] = t.meeting
 
 	// Create output filepath
 	fileName := osoperations.FormatFileName("recording", t.meeting.CreatedAt, ".wav")
@@ -73,71 +79,133 @@ func (t *TranscriberService) StartRecording(title string, participants []string)
 	return t.meeting.Id, nil
 }
 
-func (t *TranscriberService) StopMeeting(meetingId string) (string, error) {
+func (t *TranscriberService) StopMeeting(meetingId string) error {
 	// ===========================================================================
 	// Checks
 	// ===========================================================================
 	if t.meeting == nil || t.meeting.Id != meetingId {
-		return "", fmt.Errorf("no active meeting found with ID: %s", meetingId)
+		return fmt.Errorf("no active meeting found with ID: %s", meetingId)
 	}
 	t.logger.Info("Stopping meeting", "meetingId", meetingId)
 
 	// ===========================================================================
-	// Wait for file to be saved
+	// Stop the audio recorder
 	// ===========================================================================
 	if t.recorder != nil {
 		t.recorder.Stop()
 	}
-	timeoutCounter := 0
-	for timeoutCounter < 10 {
-		time.Sleep(1 * time.Second)
-		if _, err := os.Stat(t.meeting.Transcript_path); err == nil {
-			break
+
+	// ===========================================================================
+	// Update meetign
+	// ===========================================================================
+	// Store the meeting reference for async processing
+	meeting := t.meeting
+
+	// Update status to indicate processing has begun
+	meeting.Status = string(types.MeetingStatusProcessing)
+	meeting.Duration = int(time.Since(meeting.Start_time).Seconds())
+
+	// Update the meeting in the map
+	t.meetings[meetingId] = meeting
+
+	// ===========================================================================
+	// Process meeting
+	// ===========================================================================
+	go func() {
+		// Check if the audio file exists
+		timeoutCounter := 0
+		for timeoutCounter < 10 {
+			time.Sleep(1 * time.Second)
+			if _, err := os.Stat(meeting.Transcript_path); err == nil {
+				break
+			}
+			timeoutCounter++
 		}
-		timeoutCounter++
-	}
-	if _, err := os.Stat(t.meeting.Transcript_path); os.IsNotExist(err) {
-		return "", fmt.Errorf("recording file not created: %s", t.meeting.Transcript_path)
+
+		if _, err := os.Stat(meeting.Transcript_path); os.IsNotExist(err) {
+			errorMsg := fmt.Sprintf("recording file not created: %s", meeting.Transcript_path)
+			t.logger.Error(errorMsg)
+			meeting.Status = string(types.MeetingStatusFailed)
+			meeting.Error = errorMsg
+			t.meetings[meetingId] = meeting
+			return
+		}
+
+		// ===========================================================================
+		// Transcribe meeting
+		// ===========================================================================
+		transcriber := NewTranscriber(meeting.Transcript_path, t.logger, meeting)
+		transcription, err := transcriber.TranscribeAudio()
+		if err != nil {
+			errorMsg := fmt.Sprintf("failed to transcribe audio: %v", err)
+			t.logger.Error(errorMsg, "error", err)
+			meeting.Status = string(types.MeetingStatusFailed)
+			meeting.Error = errorMsg
+			t.meetings[meetingId] = meeting
+			return
+		}
+		meeting.Transcript = transcription
+
+		// ===========================================================================
+		// Summarize meeting
+		// ===========================================================================
+		summary, err := t.Summarize()
+		if err != nil {
+			errorMsg := fmt.Sprintf("failed to summarize transcription: %v", err)
+			t.logger.Error(errorMsg, "error", err)
+			meeting.Status = string(types.MeetingStatusFailed)
+			meeting.Error = errorMsg
+			t.meetings[meetingId] = meeting
+			return
+		}
+		meeting.Summary = summary
+
+		// ===========================================================================
+		// Save summary to vault
+		// ===========================================================================
+		err = osoperations.SaveMeetingToVault(meeting)
+		if err != nil {
+			errorMsg := fmt.Sprintf("failed to save meeting to vault: %v", err)
+			t.logger.Error(errorMsg, "error", err)
+			meeting.Status = string(types.MeetingStatusFailed)
+			meeting.Error = errorMsg
+			t.meetings[meetingId] = meeting
+			return
+		}
+
+		// Mark as completed if everything went well
+		meeting.Status = string(types.MeetingStatusCompleted)
+		t.meetings[meetingId] = meeting
+		t.logger.Info("Meeting processing completed successfully", "meetingId", meetingId)
+	}()
+
+	// Return immediately after starting the processing
+	return nil
+}
+
+// GetMeetingStatus retrieves the status and details of a meeting by its ID
+func (t *TranscriberService) GetMeetingStatus(meetingId string) (*types.Meeting, error) {
+	// Check if the requested meeting is the current active meeting
+	if t.meeting != nil && t.meeting.Id == meetingId {
+		return t.meeting, nil
 	}
 
-	// ===========================================================================
-	// Update status
-	// ===========================================================================
-	t.meeting.Status = string(types.MeetingStatusCompleted)
-	t.meeting.Duration = int(time.Since(t.meeting.Start_time).Seconds())
-
-	// ===========================================================================
-	// Transcribe meeting
-	// ===========================================================================
-	transcriber := NewTranscriber(t.meeting.Transcript_path, t.logger, t.meeting)
-	transcription, err := transcriber.TranscribeAudio()
-	if err != nil {
-		t.logger.Error("Failed to transcribe audio", err)
-		return "", fmt.Errorf("failed to transcribe audio: %w", err)
-	}
-	t.meeting.Transcript = transcription
-
-	// ===========================================================================
-	// Summarize meeting
-	// ===========================================================================
-	summary, err := t.Summarize()
-	if err != nil {
-		t.logger.Error("Failed to summarize transcription", err)
-		return "", fmt.Errorf("failed to summarize transcription: %w", err)
-	}
-	t.meeting.Summary = summary
-
-	// ===========================================================================
-	// Save summary to vault
-	// ===========================================================================
-	err = osoperations.SaveMeetingToVault(t.meeting)
-	if err != nil {
-		t.logger.Error("Failed to save meeting to vault", err)
-		return "", fmt.Errorf("failed to save meeting to vault: %w", err)
+	// Check if the meeting exists in our meetings map
+	if meeting, exists := t.meetings[meetingId]; exists {
+		return meeting, nil
 	}
 
-	// ===========================================================================
-	// Return
-	// ===========================================================================
-	return summary, nil
+	return nil, fmt.Errorf("meeting not found with ID: %s", meetingId)
+}
+
+// GetAllMeetings returns all meetings (both active and completed)
+func (t *TranscriberService) GetAllMeetings() []*types.Meeting {
+	meetings := make([]*types.Meeting, 0, len(t.meetings))
+
+	// Add all meetings from the map
+	for _, meeting := range t.meetings {
+		meetings = append(meetings, meeting)
+	}
+
+	return meetings
 }
