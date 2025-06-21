@@ -16,17 +16,6 @@ echo -e "${NC}"
 # Ensure we're in the project root directory
 cd "$(dirname "$0")"
 
-# Check if Python virtual environment exists
-if [ ! -d "venv" ]; then
-    echo -e "${YELLOW}Python virtual environment not found. Creating one...${NC}"
-    python3 -m venv venv
-    source venv/bin/activate
-    echo -e "${GREEN}Installing Python dependencies...${NC}"
-    pip install -r backend/requirements.txt
-else
-    source venv/bin/activate
-fi
-
 # Check if Node modules are installed
 if [ ! -d "frontend/node_modules" ]; then
     echo -e "${YELLOW}Node modules not found. Installing...${NC}"
@@ -38,13 +27,13 @@ fi
 # Function to handle script exit
 function cleanup {
     echo -e "\n${YELLOW}Shutting down servers...${NC}"
-    
+
     # Send SIGTERM to all child processes in the backend process group
     if [ -n "$BACKEND_PID" ]; then
         echo -e "${YELLOW}Stopping backend processes...${NC}"
         # Give Python a chance to clean up gracefully
         kill -TERM $BACKEND_PID 2>/dev/null
-        
+
         # Wait for up to 3 seconds for backend to exit gracefully
         for i in {1..6}; do
             if ! ps -p $BACKEND_PID > /dev/null 2>&1; then
@@ -53,17 +42,17 @@ function cleanup {
             fi
             sleep 0.5
         done
-        
+
         # Kill any remaining child processes
         pkill -P $BACKEND_PID 2>/dev/null
-        
+
         # Force kill if still running
         if ps -p $BACKEND_PID > /dev/null 2>&1; then
             echo -e "${RED}Force stopping backend processes...${NC}"
             kill -9 $BACKEND_PID 2>/dev/null
         fi
     fi
-    
+
     # Kill frontend process
     if [ -n "$FRONTEND_PID" ]; then
         echo -e "${YELLOW}Stopping frontend server...${NC}"
@@ -75,7 +64,7 @@ function cleanup {
             kill -9 $FRONTEND_PID 2>/dev/null
         fi
     fi
-    
+
     echo -e "${GREEN}All processes terminated${NC}"
     # Make sure there are no orphaned Python processes
     if pgrep -f "python.*app.main:app" > /dev/null; then
@@ -105,7 +94,7 @@ trap cleanup SIGINT
 # Start the backend server
 echo -e "${GREEN}Starting backend server...${NC}"
 cd backend
-python run.py &
+go run cmd/backend/main.go &
 BACKEND_PID=$!
 cd ..
 

@@ -1,4 +1,0 @@
-github.com/ggerganov/whisper.cpp/bindings/go v0.0.0-20250619140642-3e65f518ddf8 h1:Xx3WVx4FztrUJETV7VzgibwaPyo+BWr5OpClI8HDSYU=
-github.com/ggerganov/whisper.cpp/bindings/go v0.0.0-20250619140642-3e65f518ddf8/go.mod h1:qyHjS/50ORo01H0NsuEEGsQR9VCtOcEye0gUl2sx1s8=
-github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
-github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
