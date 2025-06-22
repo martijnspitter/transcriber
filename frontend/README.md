@@ -1,22 +1,19 @@
-# sv
+# Meeting Transcriber Frontend
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+The user interface for the Meeting Transcriber application, built with SvelteKit and TailwindCSS.
 
-## Creating a project
+## Overview
 
-If you're seeing this, you've probably already done this step. Congrats!
-
-```bash
-# create a new project in the current directory
-npx sv create
-
-# create a new project in my-app
-npx sv create my-app
-```
+This frontend allows users to:
+- Record meetings from any application
+- Manage participants
+- See real-time recording status updates
+- View markdown-formatted meeting summaries
+- Track the status of recording and processing
 
 ## Developing
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+Once you've installed dependencies with `npm install`, start the development server:
 
 ```bash
 npm run dev
@@ -25,9 +22,11 @@ npm run dev
 npm run dev -- --open
 ```
 
+The application expects the backend API to be running at http://localhost:8000. Make sure the backend server is running before using the frontend.
+
 ## Building
 
-To create a production version of your app:
+To create a production version of the frontend:
 
 ```bash
 npm run build
@@ -35,4 +34,33 @@ npm run build
 
 You can preview the production build with `npm run preview`.
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+## Features
+
+### Real-time Status Updates
+- Live status display for recording and processing stages
+- Duration tracking for recordings
+- Visual indicators for different processing states
+
+### Participant Management
+- Add participants with custom names
+- Remove participants as needed
+- Track meeting attendees
+
+### Markdown Rendering
+- Display of AI-generated meeting summaries in formatted markdown
+- Support for headings, lists, code blocks, and emphasis
+- Custom styling for better readability
+
+## Technology Stack
+
+- **SvelteKit** - Modern framework for building web applications
+- **TypeScript** - Type-safe JavaScript
+- **TailwindCSS** - Utility-first CSS framework
+- **Tailwind Typography** - For styling markdown content
+
+## Project Structure
+
+- `src/components/` - Reusable UI components
+- `src/routes/` - SvelteKit pages and layouts
+- `src/services/` - API integration and data services
+- `src/lib/` - Utility functions and shared code

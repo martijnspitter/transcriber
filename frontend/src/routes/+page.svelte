@@ -6,16 +6,18 @@ import {
   type Meeting
 } from "../services/api";
 import RecordingStatus from '../components/RecordingStatus.svelte';
-import {  onDestroy } from 'svelte';
+import MarkdownRenderer from '../components/MarkdownRenderer.svelte';
+import { onDestroy } from 'svelte';
 
 let isRecording = false;
 let meetingTitle = "New Meeting";
-let participants: string[] = ["You"];
+let participants: string[] = ["Martijn Spitter"];
+let newParticipantName = "";
 let currentMeetingId: string | null = null;
 let transcriptText = "";
 let recordingTime = 0;
 let timer: number | null = null;
-let isProcessing = false;
+
 let errorMessage = "";
 let meeting: Meeting | null = null;
 let pollingInterval: number | null = null;
@@ -61,7 +63,6 @@ async function stopRecording() {
 
   try {
     isRecording = false;
-    isProcessing = true;
 
     // Clear timer
     if (timer !== null) {
@@ -71,14 +72,15 @@ async function stopRecording() {
 
     // Call the backend API to stop meeting
     await stopMeeting(currentMeetingId);
-    transcriptText = "Processing your meeting recording...";
+
+    // Don't need to set transcript text since we'll show the RecordingStatus component
+    // with processing status instead of a generic message
 
     // Continue polling - no need to stop it as we want to see the status updates
     // while the meeting is being processed
   } catch (error) {
     console.error("Failed to stop recording:", error);
     errorMessage = error instanceof Error ? error.message : "Failed to stop recording";
-    isProcessing = false;
   }
 }
 
@@ -102,7 +104,6 @@ function startPolling() {
       // Handle status changes
       if (meeting.status === 'failed') {
         transcriptText = meeting.error || "There was an error processing your meeting.";
-        isProcessing = false;
         stopPolling();
       } else if (meeting.status === 'completed') {
         if (meeting.summary) {
@@ -110,14 +111,12 @@ function startPolling() {
         } else {
           transcriptText = "Transcription complete! Files saved to your Documents folder.";
         }
-        isProcessing = false;
         stopPolling();
       }
 
       // Update recording state if needed
       if (isRecording && meeting.status !== 'recording') {
         isRecording = false;
-        isProcessing = true;
       }
     } catch (error) {
       console.error("Error polling meeting status:", error);
@@ -137,7 +136,12 @@ function stopPolling() {
 // Function to add a new participant
 function addParticipant() {
   if (isRecording) return;
-  participants = [...participants, `Participant ${participants.length}`];
+  // Only add if there's a name or we can generate one
+  const name = newParticipantName.trim();
+  if (name || participants.length > 0) {
+    participants = [...participants, name || `Participant ${participants.length}`];
+    newParticipantName = ""; // Reset the input field
+  }
 }
 
 // Function to remove a participant
@@ -189,12 +193,25 @@ onDestroy(() => {
       <div class="mb-6">
         <div class="flex justify-between items-center mb-1">
           <label for="participants-list" class="block text-sm font-medium text-gray-700">Participants</label>
-          {#if !isRecording}
-            <button class="text-xs text-indigo-600 hover:text-indigo-800" on:click={addParticipant}>
-              + Add Participant
-            </button>
-          {/if}
         </div>
+        {#if !isRecording}
+          <div class="flex mb-2 gap-2">
+            <input
+              type="text"
+              placeholder="Enter participant name"
+              bind:value={newParticipantName}
+              class="flex-grow px-3 py-1 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+              on:keypress={(e) => e.key === 'Enter' && addParticipant()}
+              aria-label="New participant name"
+            />
+            <button
+              class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm px-3 py-1 rounded-md"
+              on:click={addParticipant}
+            >
+              Add Participant
+            </button>
+          </div>
+        {/if}
         <div id="participants-list" class="flex flex-wrap gap-2 mt-1 items-center">
           {#each participants as participant, i (participant)}
               <span class="bg-indigo-100 text-indigo-800 text-xs font-medium px-2.5 py-0.5 rounded flex items-center">
@@ -242,32 +259,82 @@ onDestroy(() => {
         </div>
       {/if}
 
-      {#if isRecording && currentMeetingId && meeting}
-        <!-- Recording status during recording -->
+      {#if meeting && meeting.error}
+        <div class="bg-red-50 p-4 rounded border mb-4">
+          <p class="font-medium text-red-800 mb-2">Error Occurred</p>
+          <p class="text-red-800">{meeting.error}</p>
+        </div>
+        <div class="mt-4 flex items-center text-sm text-gray-500">
+          <svg class="w-4 h-4 mr-1 text-red-500" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm-1-5a1 1 0 011-1h.01a1 1 0 110 2H10a1 1 0 01-1-1zm1-9a1 1 0 00-1 1v4a1 1 0 102 0V5a1 1 0 00-1-1z" clip-rule="evenodd" />
+          </svg>
+          <span>Error: {meeting.error || "Unknown error occurred"}</span>
+        </div>
+      {:else if meeting && meeting.status === 'completed' && meeting.summary}
+        <!-- Display the summary -->
+        <div class="mb-6">
+          <div class="mb-4 flex items-center justify-between">
+            <h3 class="text-xl font-semibold text-gray-800">Meeting Summary</h3>
+            <span class="bg-blue-100 text-blue-700 text-xs px-2.5 py-1 rounded-full font-medium flex items-center">
+              <svg class="w-3.5 h-3.5 mr-1.5" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+              </svg>
+              Completed
+            </span>
+          </div>
+
+          <div class="bg-white p-4 rounded-lg border shadow-sm">
+            <MarkdownRenderer markdown={meeting.summary} />
+          </div>
+
+          <div class="mt-4 flex items-center justify-between text-sm">
+            <span class="text-gray-500">
+              <svg class="w-4 h-4 mr-1 text-green-500 inline" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+              </svg>
+              Files saved at: ~/obsidian-vault/meetings/
+            </span>
+            <span class="text-indigo-600 font-medium">
+              {new Date(meeting.created_at).toLocaleString()}
+            </span>
+          </div>
+        </div>
+      {:else if meeting && meeting.status === 'completed'}
+        <!-- Show completed status with file location -->
+        <div class="mb-6">
+          <div class="mb-4 flex items-center justify-between">
+            <h3 class="text-xl font-semibold text-gray-800">Meeting Completed</h3>
+            <span class="bg-blue-100 text-blue-700 text-xs px-2.5 py-1 rounded-full font-medium flex items-center">
+              <svg class="w-3.5 h-3.5 mr-1.5" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+              </svg>
+              Completed
+            </span>
+          </div>
+
+          <div class="bg-white p-4 rounded-lg border shadow-sm">
+            <p class="text-black">{transcriptText || "Transcription complete!"}</p>
+          </div>
+
+          <div class="mt-4 flex items-center justify-between text-sm">
+            <span class="text-gray-500">
+              <svg class="w-4 h-4 mr-1 text-green-500 inline" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+              </svg>
+              Files saved at: ~/obsidian-vault/meetings/
+            </span>
+            <span class="text-indigo-600 font-medium">
+              {new Date(meeting.created_at).toLocaleString()}
+            </span>
+          </div>
+        </div>
+      {:else if meeting && currentMeetingId}
+        <!-- Show recording status for all other states -->
         <div class="mb-4 border rounded-lg overflow-hidden h-fit">
           <RecordingStatus
             meeting={meeting}
             isRecordingActive={isRecording}
           />
-        </div>
-      {:else if isProcessing}
-        <div class="bg-gray-50 p-4 rounded border text-center">
-          <div class="flex justify-center items-center mb-2">
-            <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-500"></div>
-          </div>
-          <p>Processing your meeting recording...</p>
-        </div>
-      {:else if meeting && meeting.status === 'completed' && meeting.summary}
-        <!-- Display the summary -->
-        <div class="mb-6">
-          <h3 class="text-lg font-semibold text-gray-800 mb-2">Meeting Summary</h3>
-          <div class="bg-gray-50 p-4 rounded border prose prose-sm max-w-none">
-            <div class="whitespace-pre-line">{meeting.summary}</div>
-          </div>
-
-          <div class="text-sm text-gray-500 mt-2">
-            Meeting saved to your Documents folder
-          </div>
         </div>
       {:else if transcriptText}
         <div class="bg-gray-50 p-4 rounded border">
@@ -276,22 +343,6 @@ onDestroy(() => {
       {:else}
         <div class="bg-gray-50 p-4 rounded border text-center text-gray-500">
           <p>Start recording a meeting</p>
-        </div>
-      {/if}
-
-      {#if meeting && (meeting.status === 'completed' || meeting.status === 'failed')}
-        <div class="mt-4 flex items-center text-sm text-gray-500">
-          {#if meeting.status === 'completed'}
-            <svg class="w-4 h-4 mr-1 text-green-500" fill="currentColor" viewBox="0 0 20 20">
-              <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
-            </svg>
-            <span>Files saved at: ~/Documents/Meeting_Transcripts/</span>
-          {:else}
-            <svg class="w-4 h-4 mr-1 text-red-500" fill="currentColor" viewBox="0 0 20 20">
-              <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm-1-5a1 1 0 011-1h.01a1 1 0 110 2H10a1 1 0 01-1-1zm1-9a1 1 0 00-1 1v4a1 1 0 102 0V5a1 1 0 00-1-1z" clip-rule="evenodd" />
-            </svg>
-            <span>Error: {meeting.error || "Unknown error occurred"}</span>
-          {/if}
         </div>
       {/if}
     </div>

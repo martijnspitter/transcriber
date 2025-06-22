@@ -12,7 +12,7 @@ func (t *TranscriberService) Summarize() (string, error) {
 	}
 
 	// Comprehensive instructions with structured template
-	systemPrompt := `You are an assistant that summarizes meeting transcripts into a standardized markdown format.
+	systemPrompt := `You are an assistant that summarizes meeting transcripts into a standardized markdown format. You do not have to wrap the output in markdown code blocks.
 
 Your summary MUST follow this exact structure, with all sections included even if empty:
 

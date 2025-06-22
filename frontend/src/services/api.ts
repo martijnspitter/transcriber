@@ -9,7 +9,7 @@ const API_BASE_URL = '';
 export interface Meeting {
   id: string;
   title: string;
-  status: 'recording' | 'processing' | 'completed' | 'failed';
+  status: 'recording' | 'processing' | 'recording_created' | 'transcript_created' | 'summary_created' | 'completed' | 'failed';
   created_at: string;
   start_time: string;
   duration: number;
@@ -41,7 +41,7 @@ export interface StartMeetingResponse {
 }
 
 export interface MeetingStatusResponse {
-  status: 'recording' | 'processing' | 'completed' | 'failed';
+  status: 'recording' | 'processing' | 'recording_created' | 'transcript_created' | 'summary_created' | 'completed' | 'failed';
   message?: string;
 }
 

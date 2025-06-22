@@ -70,20 +70,29 @@
     <h3 class="text-lg font-semibold">Recording Status</h3>
     <div class="flex items-center">
       <span class="flex items-center text-xs py-1 px-2 rounded-full
-        {meeting.status === 'recording' ? 'text-emerald-700 bg-emerald-100' :
-        meeting.status === 'processing' ? 'text-amber-700 bg-amber-100' :
-        meeting.status === 'completed' ? 'text-blue-700 bg-blue-100' :
-        'text-red-700 bg-red-100'}">
-        <span class="w-2 h-2
-          {meeting.status === 'recording' ? 'bg-emerald-600 animate-[pulse_2s_infinite]' :
-          meeting.status === 'processing' ? 'bg-amber-600 animate-[pulse_1.5s_infinite]' :
-          meeting.status === 'completed' ? 'bg-blue-600' :
-          'bg-red-600 animate-[pulse_1s_infinite]'}
-          rounded-full mr-1.5"></span>
-        {meeting.status === 'recording' ? 'Recording' :
-        meeting.status === 'processing' ? 'Processing' :
-        meeting.status === 'completed' ? 'Completed' : 'Failed'}
-      </span>
+      {meeting.status === 'recording' ? 'text-emerald-700 bg-emerald-100' :
+      meeting.status === 'processing' ? 'text-amber-700 bg-amber-100' :
+      meeting.status === 'recording_created' ? 'text-amber-700 bg-amber-100' :
+      meeting.status === 'transcript_created' ? 'text-amber-700 bg-amber-100' :
+      meeting.status === 'summary_created' ? 'text-amber-700 bg-amber-100' :
+      meeting.status === 'completed' ? 'text-blue-700 bg-blue-100' :
+      'text-red-700 bg-red-100'}">
+      <span class="w-2 h-2
+        {meeting.status === 'recording' ? 'bg-emerald-600 animate-[pulse_2s_infinite]' :
+        meeting.status === 'processing' ? 'bg-amber-600 animate-[pulse_1.5s_infinite]' :
+        meeting.status === 'recording_created' ? 'bg-amber-600 animate-[pulse_1.5s_infinite]' :
+        meeting.status === 'transcript_created' ? 'bg-amber-600 animate-[pulse_1.5s_infinite]' :
+        meeting.status === 'summary_created' ? 'bg-amber-600 animate-[pulse_1.5s_infinite]' :
+        meeting.status === 'completed' ? 'bg-blue-600' :
+        'bg-red-600 animate-[pulse_1s_infinite]'}
+        rounded-full mr-1.5"></span>
+      {meeting.status === 'recording' ? 'Recording' :
+      meeting.status === 'processing' ? 'Processing' :
+      meeting.status === 'recording_created' ? 'Creating Transcript' :
+      meeting.status === 'transcript_created' ? 'Creating Summary' :
+      meeting.status === 'summary_created' ? 'Finalizing' :
+      meeting.status === 'completed' ? 'Completed' : 'Failed'}
+    </span>
     </div>
   </div>
 
@@ -95,12 +104,15 @@
         <div class="bg-white p-3 rounded-lg shadow-sm border border-gray-200">
           <h4 class="text-sm font-medium text-gray-700 mb-2">Status</h4>
           <div class="text-lg font-medium" class:text-indigo-700={meeting.status === 'recording'}
-               class:text-amber-600={meeting.status === 'processing'}
+               class:text-amber-600={meeting.status === 'processing' || meeting.status === 'recording_created' || meeting.status === 'transcript_created' || meeting.status === 'summary_created'}
                class:text-emerald-700={meeting.status === 'completed'}
                class:text-red-600={meeting.status === 'failed'}>
             {meeting.status === 'recording' ? 'Recording in progress' :
-             meeting.status === 'processing' ? 'Processing recording' :
-             meeting.status === 'completed' ? 'Completed' : 'Failed'}
+             meeting.status === 'processing' ? 'Processing your recording' :
+             meeting.status === 'recording_created' ? 'Audio saved successfully' :
+             meeting.status === 'transcript_created' ? 'Transcript created successfully' :
+             meeting.status === 'summary_created' ? 'Meeting summary generated' :
+             meeting.status === 'completed' ? 'All processing completed' : 'Processing failed'}
           </div>
         </div>
 
