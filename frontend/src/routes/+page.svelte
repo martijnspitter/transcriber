@@ -103,6 +103,7 @@ function startPolling() {
       if (meeting.status === 'failed') {
         transcriptText = meeting.error || "There was an error processing your meeting.";
         isProcessing = false;
+        stopPolling();
       } else if (meeting.status === 'completed') {
         if (meeting.summary) {
           transcriptText = "Transcription and summarization complete!";
@@ -110,13 +111,7 @@ function startPolling() {
           transcriptText = "Transcription complete! Files saved to your Documents folder.";
         }
         isProcessing = false;
-
-        // Slow down polling once completed
-        if (pollingTimeout !== 5000) {
-          pollingTimeout = 5000;
-          stopPolling();
-          startPolling();
-        }
+        stopPolling();
       }
 
       // Update recording state if needed

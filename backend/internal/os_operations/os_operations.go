@@ -56,7 +56,14 @@ func SaveMeetingToVault(meeting *types.Meeting) error {
 	dirName := "obsidian-vault"
 	fileName := FormatFileName("meeting", meeting.CreatedAt, ".md")
 
-	err := CreateFile(dirName, fileName, []byte(meeting.Summary))
+	// The obsidian vault directory should exist in the user's home directory
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	dirName = filepath.Join(homeDir, dirName)
+	err = CreateFile(dirName, fileName, []byte(meeting.Summary))
 
 	return err
 }

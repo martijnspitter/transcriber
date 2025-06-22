@@ -63,7 +63,7 @@ export interface MeetingsResponse {
  */
 export async function startMeeting(data: CreateMeetingRequest): Promise<StartMeetingResponse> {
   try {
-    const response = await fetch(`${API_BASE_URL}/start-recording`, {
+    const response = await fetch(`${API_BASE_URL}/api/meetings`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -88,7 +88,7 @@ export async function startMeeting(data: CreateMeetingRequest): Promise<StartMee
  */
 export async function stopMeeting(meetingId: string): Promise<StopMeetingResponse> {
   try {
-    const response = await fetch(`${API_BASE_URL}/stop-recording`, {
+    const response = await fetch(`${API_BASE_URL}/api/meetings/${meetingId}/stop`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -114,7 +114,7 @@ export async function stopMeeting(meetingId: string): Promise<StopMeetingRespons
  */
 export async function getMeeting(meetingId: string): Promise<Meeting> {
   try {
-    const response = await fetch(`${API_BASE_URL}/meeting-status?id=${meetingId}`);
+    const response = await fetch(`${API_BASE_URL}/api/meetings/${meetingId}`);
 
     if (!response.ok) {
       const errorData = await response.json();
@@ -133,7 +133,7 @@ export async function getMeeting(meetingId: string): Promise<Meeting> {
  */
 export async function getAllMeetings(): Promise<Meeting[]> {
   try {
-    const response = await fetch(`${API_BASE_URL}/meetings`);
+    const response = await fetch(`${API_BASE_URL}/api/meetings`);
 
     if (!response.ok) {
       const errorData = await response.json();

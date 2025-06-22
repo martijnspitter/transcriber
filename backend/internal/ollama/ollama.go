@@ -31,7 +31,7 @@ type Response struct {
 	EvalDuration       int64     `json:"eval_duration"`
 }
 
-const ollamaAPIURL = "http://localhost:11434/api/chat."
+const ollamaAPIURL = "http://localhost:11434/api/chat"
 const model = "mistral"
 const stream = false
 

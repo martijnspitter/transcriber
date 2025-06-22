@@ -13,16 +13,24 @@ import (
 )
 
 type TranscriberService struct {
-	meeting  *types.Meeting
-	logger   *logger.Logger
-	recorder *audiocapture.CombinedAudio
-	meetings map[string]*types.Meeting
+	meeting   *types.Meeting
+	logger    *logger.Logger
+	recorder  *audiocapture.CombinedAudio
+	meetings  map[string]*types.Meeting
+	recordDir string // Directory to store recordings
 }
 
 func NewTranscriberService(logger *logger.Logger) *TranscriberService {
+	tempDir, err := osoperations.CreateTempDirectory("recording_output")
+	if err != nil {
+		logger.Error("Failed to create temp directory for recordings", "error", err)
+		return nil
+	}
+
 	return &TranscriberService{
-		logger:   logger,
-		meetings: make(map[string]*types.Meeting),
+		logger:    logger,
+		meetings:  make(map[string]*types.Meeting),
+		recordDir: tempDir,
 	}
 }
 
@@ -47,13 +55,7 @@ func (t *TranscriberService) StartRecording(title string, participants []string)
 
 	// Create output filepath
 	fileName := osoperations.FormatFileName("recording", t.meeting.CreatedAt, ".wav")
-	// Create a temporary output directory
-	tempDir, err := osoperations.CreateTempDirectory("recording_output")
-	if err != nil {
-		return "", fmt.Errorf("failed to create temp directory: %w", err)
-	}
-	defer osoperations.RemoveTempDirectory(tempDir) // Clean up temp dir when done
-	finalFilePath := osoperations.CreateFilePath(tempDir, fileName)
+	finalFilePath := osoperations.CreateFilePath(t.recordDir, fileName)
 
 	// Create combined audio capture instance
 	audioCapture := audiocapture.NewCombinedAudio(finalFilePath)
@@ -92,6 +94,7 @@ func (t *TranscriberService) StopMeeting(meetingId string) error {
 	// Stop the audio recorder
 	// ===========================================================================
 	if t.recorder != nil {
+		t.logger.Debug("Stopping audio recorder", "meetingId", meetingId)
 		t.recorder.Stop()
 	}
 
@@ -112,11 +115,14 @@ func (t *TranscriberService) StopMeeting(meetingId string) error {
 	// Process meeting
 	// ===========================================================================
 	go func() {
+		defer osoperations.RemoveTempDirectory(t.recordDir) // Clean up temp dir when done
+
 		// Check if the audio file exists
 		timeoutCounter := 0
 		for timeoutCounter < 10 {
 			time.Sleep(1 * time.Second)
 			if _, err := os.Stat(meeting.Transcript_path); err == nil {
+				meeting.Status = string(types.MeetingStatusRecordingCreated)
 				break
 			}
 			timeoutCounter++
@@ -145,6 +151,7 @@ func (t *TranscriberService) StopMeeting(meetingId string) error {
 			return
 		}
 		meeting.Transcript = transcription
+		meeting.Status = string(types.MeetingStatusTranscriptCreated)
 
 		// ===========================================================================
 		// Summarize meeting
@@ -159,6 +166,7 @@ func (t *TranscriberService) StopMeeting(meetingId string) error {
 			return
 		}
 		meeting.Summary = summary
+		meeting.Status = string(types.MeetingStatusSummaryCreated)
 
 		// ===========================================================================
 		// Save summary to vault

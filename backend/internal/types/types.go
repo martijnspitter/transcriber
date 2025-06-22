@@ -5,10 +5,13 @@ import "time"
 type MeetingStatus string
 
 const (
-	MeetingStatusRecording  MeetingStatus = "recording"
-	MeetingStatusProcessing MeetingStatus = "processing"
-	MeetingStatusCompleted  MeetingStatus = "completed"
-	MeetingStatusFailed     MeetingStatus = "failed"
+	MeetingStatusRecording         MeetingStatus = "recording"
+	MeetingStatusProcessing        MeetingStatus = "processing"
+	MeetingStatusRecordingCreated  MeetingStatus = "recording_created"
+	MeetingStatusTranscriptCreated MeetingStatus = "transcript_created"
+	MeetingStatusSummaryCreated    MeetingStatus = "summary_created"
+	MeetingStatusCompleted         MeetingStatus = "completed"
+	MeetingStatusFailed            MeetingStatus = "failed"
 )
 
 type Meeting struct {

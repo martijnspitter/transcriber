@@ -59,6 +59,7 @@ func (s *Transcriber) TranscribeAudio() (string, error) {
 		"--verbose", "False")
 
 	// Run the whisper command
+	s.logger.Info("Running Whisper command", "command", cmd.String())
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		s.logger.Error("Whisper transcription failed", err)
@@ -90,6 +91,7 @@ func (s *Transcriber) TranscribeAudio() (string, error) {
 				break
 			}
 		}
+		s.logger.Info("Checking for transcription file", "expectedFile", expectedOutputFile, "found", found)
 
 		if !found {
 			s.logger.Error("No transcription file found", nil)
@@ -108,6 +110,7 @@ func (s *Transcriber) TranscribeAudio() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to parse SRT file: %w", err)
 	}
+	s.logger.Info("Parsed %d segments from SRT file", len(segments))
 
 	// Create markdown header with meeting info
 	header := fmt.Sprintf("# %s\n\n", s.meeting.Title)
@@ -125,6 +128,7 @@ func (s *Transcriber) TranscribeAudio() (string, error) {
 	header += "## Transcript\n\n"
 
 	// Generate transcript with the formatted segments
+	s.logger.Info("Generating transcript from segments")
 	var transcript strings.Builder
 	transcript.WriteString(header)
 
@@ -133,6 +137,7 @@ func (s *Transcriber) TranscribeAudio() (string, error) {
 		transcript.WriteString(fmt.Sprintf("[%s --> %s] %s\n", segment.startTime, segment.endTime, segment.text))
 	}
 
+	s.logger.Info("Adding summary to transcript")
 	s.summary = transcript.String()
 
 	s.logger.Info("Transcription completed")
